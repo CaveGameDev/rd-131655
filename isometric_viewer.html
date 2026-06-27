@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Isometric Map Viewer</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/3.js"
+    }
+  }
+  </script>
+  <style>
+    html,body { height:100%; margin:0; background:#0b1220; color:#ddd; font-family:Inter,system-ui,Arial; }
+    #ui { position: absolute; left:12px; top:12px; z-index: 30; display:flex; gap:8px; align-items:center; }
+    #file { display:inline-block; }
+    #info { font-size:13px; opacity:0.9; }
+    #canvas-wrap { width:100%; height:100%; display:block; position:relative; }
+    #rendererCanvas { width:100%; height:100%; display:block; }
+    button { background:#1f2937; color:#eee; border:1px solid rgba(255,255,255,0.04); padding:8px 10px; border-radius:6px; cursor:pointer; }
+    input[type=file] { color:#fff; }
+    #legend { position:absolute; right:12px; top:12px; background:rgba(0,0,0,0.35); padding:8px; border-radius:6px; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <input id="file" type="file" accept=".dat,application/octet-stream"/>
+    <button id="fit">Fit view</button>
+    <div id="info">No world loaded</div>
+  </div>
+  <div id="legend">Controls: Drag to rotate, Scroll to zoom</div>
+  <div id="canvas-wrap"><canvas id="rendererCanvas"></canvas></div>
+
+  <script type="module">
+    import * as THREE from "three";
+
+    const canvas = document.getElementById('rendererCanvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:false });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b1220);
+
+    // Isometric-style camera
+    const aspect = window.innerWidth / window.innerHeight;
+    const camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 5000);
+    camera.position.set(80, 120, 120);
+    camera.lookAt(0, 0, 0);
+
+    // simple hemisphere + directional
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 0.95));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(100, 200, 100);
+    scene.add(dir);
+
+    // root group for world geometry
+    const worldGroup = new THREE.Group();
+    scene.add(worldGroup);
+
+    // material atlas fallback
+    const defaultMat = new THREE.MeshStandardMaterial({ color: 0x7fb35b });
+
+    // quick palette by tile id fallback (if atlas not available)
+    const DEFAULT_COLORS = {
+      1: 0x7fb35b, // grass_top
+      2: 0x888888, // stone (older variants)
+      3: 0x6f4b2f, // dirt
+      5: 0x8b5a2b, // wood
+      6: 0x6a6a6a, // cobble
+      7: 0xffcc00  // key6
+    };
+
+    let currentState = {
+      width: 0, height: 0, depth: 0, blocks: null, loaded: false
+    };
+
+    // basic orbit-like controls (lightweight)
+    let isDown = false, lastX=0, lastY=0;
+    let rotX = -0.6, rotY = -0.8, distance = 220;
+    canvas.addEventListener('mousedown', (e) => { isDown = true; lastX = e.clientX; lastY = e.clientY; });
+    window.addEventListener('mouseup', () => isDown = false);
+    window.addEventListener('mousemove', (e) => {
+      if (!isDown) return;
+      const dx = (e.clientX - lastX) * 0.005;
+      const dy = (e.clientY - lastY) * 0.005;
+      rotY += dx;
+      rotX = Math.max(-1.2, Math.min(0.2, rotX + dy));
+      lastX = e.clientX; lastY = e.clientY;
+      updateCamera();
+    });
+    window.addEventListener('wheel', (e) => {
+      distance += e.deltaY * 0.2;
+      distance = Math.max(40, Math.min(1000, distance));
+      updateCamera();
+    }, { passive:true });
+
+    function updateCamera() {
+      const x = Math.cos(rotY) * Math.cos(rotX) * distance;
+      const y = Math.sin(rotX) * distance;
+      const z = Math.sin(rotY) * Math.cos(rotX) * distance;
+      camera.position.set(x, y, z);
+      camera.lookAt(0, 0, 0);
+    }
+
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    // parse uploaded file format (header JSON line then raw block bytes)
+    async function parseLevelFile(file) {
+      const ab = await file.arrayBuffer();
+      const bytes = new Uint8Array(ab);
+      const newlineIndex = bytes.indexOf(10);
+      if (newlineIndex <= 0) throw new Error('Invalid save format (no header)');
+      const headerText = new TextDecoder().decode(bytes.subarray(0, newlineIndex));
+      const header = JSON.parse(headerText);
+      const width = header.width, height = header.height, depth = header.depth;
+      const blockBytes = bytes.subarray(newlineIndex + 1);
+      if (blockBytes.length < width * height * depth) throw new Error('Save file truncated or mismatched dimensions');
+      // create a typed copy matching engine order (x + y*W + z*(W*D))
+      const blocks = new Uint8Array(width * height * depth);
+      blocks.set(blockBytes.subarray(0, blocks.length));
+      return { header, blocks, width, height, depth };
+    }
+
+    function buildTopSurfaceMesh(width, height, depth, blocks) {
+      // Clear previous
+      while (worldGroup.children.length) {
+        const c = worldGroup.children[0];
+        c.geometry?.dispose?.();
+        c.material?.dispose?.();
+        worldGroup.remove(c);
+      }
+
+      // For performance: build a single InstancedMesh for top-surface cubes
+      const topPositions = [];
+      for (let x=0;x<width;x++){
+        for (let z=0;z<height;z++){
+          // find highest non-air block
+          let topY = -1;
+          for (let y = depth - 1; y >= 0; y--) {
+            const id = blocks[x + y * width + z * (width * depth)];
+            if (id !== 0) { topY = y; break; }
+          }
+          if (topY >= 0) topPositions.push({ x, y: topY, z, id: blocks[x + topY * width + z * (width * depth)] });
+        }
+      }
+
+      const count = topPositions.length;
+      if (count === 0) return;
+
+      // create a small cube geometry and instance it for the top face visual
+      const box = new THREE.BoxGeometry(1, 1, 1);
+      // bevel/shrink slightly so stacked columns don't Z-fight visually
+      box.translate(0.5, 0.5, 0.5);
+
+      const instancedMesh = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ vertexColors:false }), count);
+      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+      const tmpMat = new THREE.Object3D();
+      let i = 0;
+      for (const p of topPositions) {
+        tmpMat.position.set(p.x, p.y, p.z);
+        tmpMat.updateMatrix();
+        instancedMesh.setMatrixAt(i, tmpMat.matrix);
+        // color per-instance via setColor if supported (use instance color attribute)
+        const col = DEFAULT_COLORS[p.id] || 0x8888ff;
+        const color = new THREE.Color(col);
+        instancedMesh.setColorAt(i, color);
+        i++;
+      }
+
+      // enable instance color attribute
+      instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+      for (let k=0;k<count;k++) {
+        const clr = new THREE.Color(DEFAULT_COLORS[topPositions[k].id] || 0x8888ff);
+        instancedMesh.instanceColor.setXYZ(k, clr.r, clr.g, clr.b);
+      }
+
+      // Rotate world so X/Z align isometric-friendly: rotate -45deg around Y and tilt camera rather than rotate mesh
+      worldGroup.add(instancedMesh);
+
+      // Add simple column previews (thin vertical translucent stacks) for depth impression
+      const cols = new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({ color:0x000000, transparent:true, opacity:0.08, depthWrite:false }), count);
+      cols.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      i = 0;
+      for (const p of topPositions) {
+        tmpMat.position.set(p.x + 0.5 - 0.5, (p.y+1)/2, p.z + 0.5 - 0.5);
+        tmpMat.scale.set(1, p.y + 1, 1);
+        tmpMat.updateMatrix();
+        cols.setMatrixAt(i, tmpMat.matrix);
+        i++;
+      }
+      worldGroup.add(cols);
+
+      // Center the world at origin
+      const centerX = width / 2;
+      const centerZ = height / 2;
+      worldGroup.position.set(-centerX, 0, -centerZ);
+
+      // apply isometric rotation for a pleasant angled look
+      worldGroup.rotation.y = -Math.PI / 4;
+      worldGroup.rotation.x = -0.35;
+    }
+
+    // Fit view: compute bounding box and set camera distance/angles
+    function fitView(width, height) {
+      const diag = Math.sqrt(width * width + height * height);
+      distance = Math.max(80, diag * 1.6);
+      rotX = -0.6; rotY = -0.8;
+      updateCamera();
+    }
+
+    // wire file input
+    const fileInput = document.getElementById('file');
+    const info = document.getElementById('info');
+    fileInput.addEventListener('change', async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      info.textContent = 'Loading...';
+      try {
+        const data = await parseLevelFile(f);
+        currentState.width = data.width;
+        currentState.height = data.height;
+        currentState.depth = data.depth;
+        currentState.blocks = data.blocks;
+        currentState.loaded = true;
+        buildTopSurfaceMesh(data.width, data.height, data.depth, data.blocks);
+        fitView(data.width, data.height);
+        info.textContent = `Loaded: ${f.name} — ${data.width}×${data.depth}×${data.height} (${data.blocks.length} blocks)`;
+      } catch (err) {
+        console.error(err);
+        info.textContent = 'Load failed: ' + (err && err.message ? err.message : String(err));
+      }
+    });
+
+    document.getElementById('fit').addEventListener('click', () => {
+      if (currentState.loaded) fitView(currentState.width, currentState.height);
+    });
+
+    // animation loop
+    (function animate() {
+      requestAnimationFrame(animate);
+      // subtle slow rotation when idle
+      if (!isDown) rotY += 0.0006;
+      worldGroup.rotation.y = -Math.PI / 4 + rotY;
+      worldGroup.rotation.x = -0.35 + (rotX + 0.35) * 0.0; // keep tilt stable
+      renderer.render(scene, camera);
+    })();
+
+    // initial camera update
+    updateCamera();
+  </script>
+</body>
+</html>
