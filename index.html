@@ -1,1170 +1,884 @@
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>rd-131655</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background: #000;
-            font-family: 'Noto Sans', Arial, sans-serif;
-        }
-        canvas {
-            display: block;
-            cursor: none;
-        }
-        #ui {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            font-size: 14px;
-            z-index: 100;
-        }
-    </style>
-</head>
-<body>
-    <canvas id="canvas"></canvas>
-    
-    <div id="ui">
-    </div>
-
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "/three.module.js"
-        }
-    }
-    </script>
-    <script type="module">
-        import * as THREE from 'three';
-
-        class AABB {
-            constructor(minX, minY, minZ, maxX, maxY, maxZ) {
-                this.minX = minX;
-                this.minY = minY;
-                this.minZ = minZ;
-                this.maxX = maxX;
-                this.maxY = maxY;
-                this.maxZ = maxZ;
+    <head>
+        <meta charset="UTF-8" />
+        <meta content="width=device-width,initial-scale=1" name="viewport" />
+        <title>rd</title>
+        <script type="importmap">
+            {
+                "imports": {
+                    "three": "/3.js"
+                }
             }
+        </script>
+        <link rel="stylesheet" href="./css/ui-styles.css">
+        <style>
+/* === inlined from css/base-reset.css === */
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+body {
+    overflow: hidden;
+    background: #000;
+    font-family: "Noto Sans", Arial, sans-serif;
+}
 
-            expand(x, y, z) {
-                let newMinX = this.minX;
-                let newMinY = this.minY;
-                let newMinZ = this.minZ;
-                let newMaxX = this.maxX;
-                let newMaxY = this.maxY;
-                let newMaxZ = this.maxZ;
+/* === inlined from css/viewport-styles.css === */
+/* Centered viewport container so canvas and key icons are auto-centered */
+#viewport {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 866px;
+    height: 480px;
+    transform: translate(-50%, -50%);
+    pointer-events: none; /* let interactive elements stay global */
+    z-index: 50;
+}
+canvas {
+    display: block;
+    cursor: none;
+    width: 866px;
+    height: 480px;
+    /* make canvas fill the centered viewport */
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: auto; /* allow pointer lock / clicks on the canvas */
+}
 
-                if (x < 0) newMinX += x; else newMaxX += x;
-                if (y < 0) newMinY += y; else newMaxY += y;
-                if (z < 0) newMinZ += z; else newMaxZ += z;
+/* Mobile: render the centered viewport at a smaller size so fonts/icons are easily inspected.
+   Keep it centered, allow pinch-zoom, and ensure touch gestures aren't blocked. This does not
+   change game internals (game remains desktop-oriented), it only visually scales the preview. */
+@media (max-width: 720px) {
+  #viewport {
+    width: 320px;
+    height: 180px;
+    transform: translate(-50%, -50%) scale(0.9);
+    will-change: transform;
+    touch-action: pinch-zoom;
+  }
+  canvas {
+    width: 320px;
+    height: 180px;
+    image-rendering: pixelated;
+  }
+}
 
-                return new AABB(newMinX, newMinY, newMinZ, newMaxX, newMaxY, newMaxZ);
-            }
+/* === inlined from css/controls-reset.css === */
+/* Ensure native buttons get a consistent, visible style when no specific class is present.
+   This fixes secret dropdown and other buttons that were showing browser default styling. */
+button {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background: #e0e0e0;
+  color: #000;
+  border: 1px solid #999;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  box-shadow: none;
+}
+button:hover { background: #d0d0d0; }
+button:active { transform: translateY(1px); }
 
-            move(x, y, z) {
-                this.minX += x;
-                this.minY += y;
-                this.minZ += z;
-                this.maxX += x;
-                this.maxY += y;
-                this.maxZ += z;
-            }
+/* === inlined from css/keycanvas-styles.css === */
+/* key icon positioned inside the centered viewport (top-right corner of canvas) */
+#keyCanvas {
+    position: absolute;
+    /* ensure it's anchored to the viewport's top-right */
+    left: auto;
+    right: 8px;
+    top: 8px;
+    width: 46px !important;
+    height: 50px !important;
+    z-index: 101;
+    pointer-events: none;
+    image-rendering: crisp-edges;
+    image-rendering: -webkit-optimize-contrast;
+    display: none;
+}
+#keyCanvas.active {
+    display: block;
+}
 
-            clipXCollide(other, x) {
-                if (other.maxY <= this.minY || other.minY >= this.maxY || other.maxZ <= this.minZ || other.minZ >= this.maxZ) {
-                    return x;
+/* === inlined from css/secret-dropdown.css === */
+/* reveal controls on hover */
+#controls-list:hover #controls-expanded { display:block; }
+#controls-list #controls-collapsed { pointer-events:none; }
+/* allow programmatic opening of controls via a class toggle */
+body.controls-open #controls-list #controls-expanded { display:block; }
+
+/* secret centered-bottom hover dropdown: relocated to sit just below the canvas inside #viewport
+   Expanded invisible hover area so users can hover where the box will appear (below the canvas)
+   to reveal the dropdown — the visible trigger symbol remains but is made invisible. */
+#viewport #secret-actions {
+  position: absolute;
+  left: 50%;
+  /* moved further down so the secret widget becomes its own hover target below the canvas */
+  bottom: -89px;
+  transform: translateX(-50%);
+  z-index: 220;
+  pointer-events: auto;
+  font-family: monospace;
+  line-height: 1;
+  width: auto;
+  text-align: center;
+  /* minimal hit area so hovering where the box will appear (below the canvas) works,
+     but avoid large vertical padding that displaced the UI from its trigger */
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+/* tiny trigger is visually hidden but still present to maintain semantics and click behavior */
+#viewport #secret-trigger {
+  background: transparent;
+  color: transparent;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 3px;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 20px;
+  box-shadow: none;
+  user-select: none;
+  /* fully invisible but still interactive */
+  opacity: 0;
+}
+/* dropdown positioned immediately above the (invisible) trigger so it appears on top of the button */
+/* shrink to fit only the two buttons; allow pointer to remain over drop to keep it visible */
+#viewport #secret-drop {
+  position: absolute;
+  bottom: 100%;
+  top: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
+  background: #f3f3f3;
+  color: #000;
+  padding: 4px;
+  border: 1px solid #777;
+  border-radius: 3px;
+  display: none;
+  min-width: auto;
+  width: auto;
+  box-shadow: none;
+  text-align: left;
+  white-space: nowrap;
+}
+/* show dropdown when hovering the larger hover area (so hovering the future box location works),
+   or when hovering the dropdown itself so it doesn't vanish while moving into it */
+#viewport #secret-actions:hover #secret-drop,
+#viewport #secret-drop:hover {
+  display: block;
+}
+#viewport #secret-drop > div { display:inline-flex; align-items:center; gap:8px; }
+#viewport #secret-drop button {
+  background: #e0e0e0;
+  border: 1px solid #999;
+  color: #000;
+  padding: 6px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin: 0;
+  font-size: 13px;
+  box-shadow: none;
+}
+#viewport #secret-drop button + button { margin-left: 8px; }
+#viewport #secret-drop button:hover { background: #d0d0d0; }
+
+/* === inlined from css/escape-modal.css === */
+/* ESC modal wrapper positioned at modal location but stripped of any background/box
+   so only the interactive bars inside (#escBars) are visible. */
+#escModal {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 40px); /* keep the modal visually lowered as JS expects */
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 99999;
+  pointer-events: auto;
+  background: transparent; /* remove dark translucent box */
+  width: auto;
+  height: auto;
+}
+
+/* Container that previously provided the box framing is now transparent and minimal.
+   It only exists to center the bars; no background, border or shadow are shown. */
+#escModalBox {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  pointer-events: none; /* let the bars themselves accept pointer events */
+  width: auto;
+  height: auto;
+  padding: 0;
+}
+
+/* content block is unused visually but kept for structure; no visible styling */
+#escModalContent {
+  text-align: center;
+  padding: 0;
+  width: auto;
+  box-sizing: border-box;
+}
+
+/* Four stacked bars container (unchanged sizing). Bars are the only visible elements. */
+#escBars {
+  width: 404px;
+  /* 4 * 46 = 184; spacing between bars remains 3 * 20 = 60 -> overall visual space larger */
+  height: 244px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  pointer-events: auto;
+  position: relative;
+  z-index: 100001; /* ensure bars render above the viewport-scoped gradient backdrop */
+}
+
+/* Each bar exact size; visible and interactive. Use image assets for visual states. */
+.esc-bar {
+  width: 404px;
+  height: 46px; /* +2px for each button */
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+  /* Use exact pixel-sized background and disable smoothing for crisp pixel art */
+  background-size: 404px 46px;
+  image-rendering: pixelated;
+  -webkit-optimize-contrast: pixelated;
+  border: 1px solid rgba(255,255,255,0.04);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) inset;
+  pointer-events: auto;
+  transform: translateX(-0px);
+  cursor: pointer;
+  position: relative;
+  z-index: 100002; /* sit above the container/backdrop to avoid tinting */
+}
+
+/* Maintain exact 20px gap between bars */
+.esc-bar + .esc-bar { margin-top: 20px; }
+
+/* default image backgrounds for each button (normal state) */
+#Button1 { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsEAAA7BAbiRa+0AAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACfklEQVR4Xu3cQU4bQRAF0JCTcBS4VXaIXY7BTeAo3CQsUEXyl0o9w1SIR35vg5iuqW63LVWXR/Ldy8vLnx8AcNDPvAAAX3FXHcr7ew4BwNr9/edfHQoAIxQUAEYoKACMUFAAGKGgADBCQQFghIICwAgFBYARCgoAIxQUAEYoKACM8FteJ/P0lFcuPT/nldtS+3Pr+5DOsi9nWSeX/JYXAKN0KCeRJ7fX198X4+nx8Vdeugm1Tw8Pn/tzq/uQzrIvZ1knl3QoAIzSoZxEd3LLZyr53XOOl61xJeNLd1/GZ4eV92V8ybiS8dNxK12e0uXr7sv43K+0Gk/d5yfHU+ZfzduN783frZPrpEMBYJQO5SRWJ7ccf3v7HK8TYD5zyfG8P3Xxe/OXvC/j0yp/6V5Hxm/N1+nmKZnvq/u19f3O8dTF/+t15f1H83OddCgAjNKhnMTq5JbjdfJbyfjvyl9ynjrB5gm6k+vNdeb1lbyv083TjR/dr6Mn+S5+777kunLenOfo6878XCcdCgCjdCgnkSe/PLnleJ70VjL+u/Onmm/13Xvmy3V211e2ri/n6cZzvSsZv/o/50+5nqP7ku9P/p/Pxrbmz/jV6+I66FAAGKVDOZnuO+88GeZJspMnzO5k2I1P5e+s8nf58sSc1zsZ31m9nm587/yr+My/Mr0vmS8/f2Vv/szLddOhADBKh3JS+Uyh5MmwdPGl7utOmKUbn8rf2Zo/dfN9NV/q8pdufO/8e+NXptZVunxpb/6tefm/dCgAjNKhAHCIDgWAUQoKACMUFABGKCgAjFBQABihoAAwQkEBYISCAsAIBQWAEQoKACMUFABG/P0tLwA4QocCwIgP1DvF0CgyMh8AAAAASUVORK5CYII='); }
+#Button2 { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsEAAA7BAbiRa+0AAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAAB+ElEQVR4Xu3c3a3bMAwGUN1OlVEyRkbJGBklW7VPKtAPl5B/mCK5OOfNkUxJgAGSMeCvMcbvAQAn/cofAOCIr9mh3G63HAOApfv9PoYOBYAuEgoALSQUAFpIKAC0kFAAaCGhANBCQgGghYQCQAsJBYAWEgoALSQUAFr4lhetVs/R/ObPp5nnevf9f8o++Vl8ywuAVjoUWmRl/Hw+Y8a/LpdL/vTW5vmu1+sYb7z/T9knP4sOBYBWOhRaVc9R9Z/+1vnZAaVqfGv8lVXlv3Wdap9TNb43frVPeAUdCgCtdCi8RL5DeTweY3xTUU+r+avKO8fz/lX8lYw/18+OYrVOFWfK8bz/bHx4BR0KAK10KPwXVeW8eu6yUs/7p4w/569U8VLG37r/KfeVcaZcZ+85VvHhFXQoALTSodAi3yWkqvJevRvISjvXyesZJ+9fWVXyuf/cz951ct95ffQcOX/renCGDgWAVjoUWlXPUVbeWTlXstKessLOuDmvsrdCz3Xz90rOnzJe1zkybnZSVScDR+hQAGilQ+El8p3IVFXC1fxpdV81Ph2NX6nWPbpOFS/tjZ9xV9dwhA4FgFY6FABO0aEA0EpCAaCFhAJACwkFgBYSCgAtJBQAWkgoALSQUABoIaEA0EJCAaCFhAJAi7/f8gKAM3QoALT4A1tIO1A2z7xVAAAAAElFTkSuQmCC'); }
+#Button3 { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsEAAA7BAbiRa+0AAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAAB/ElEQVR4Xu3dUW6CQBAG4LWn4igcg6NwDI7CrdqXThMnbnBljNV8X8KDMgxLYvIzDdVLa+27AcBJX/kNAHjEJSaUZVnyPgA4tK5rayYUAKoIFABKCBQASggUAEoIFABKCBQASggUAEoIFABKCBQASggUAEoIFABKCBRKLMvyVt8HN7re0fpXeZd18pkECgAlBAql9n1v+77nt/+t0fWO1r/Ku6yTzyJQACjh91AoEZ+feZ5ba61N05Qqbut97uL3FbKz9VE3ut6j+nyekNcVdfn90Ns/2r+3TngGv4cCQCkTCiVG74zznXj+e/+2bVf7s6P6Xv+oC6PrzfW984TeunKfkPfn48/2h2cwoQBQSqDwUvE00jRNV1veH5bf/7PYtu1q69Xn/uu6dqeeM0bXNerZ/aGCQAGghEDhLcQdekwY8zxfba+W15O3EOvPE0a+viz3y9uR6N97DRUECgAlPOVFiXs/P/nuu3dcfqopP1XVE3frj9YfiX73XkfI9SH3y9eb63py/9w3Xsf1xnQ0ev1wi6e8AChlQqHUvU8a5Tvi3nG5LvTqQz5utP5Ib5J49Dy9ftlo/9z36DU8woQCQCkTCgCnmFAAKCVQACghUAAoIVAAKCFQACghUAAoIVAAKCFQACghUAAoIVAAKCFQACjx911eAHCGCQWAEj8/R0m4m9Wa5wAAAABJRU5ErkJggg=='); }
+#Button4 { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsEAAA7BAbiRa+0AAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACOklEQVR4Xu3c3a0aMRAGUN9URSmUQSmUQSnbVfLkCH1irg1MEimcI90H1mPvjxbNzK4uX2OMnwMA3vQjNwDAK75mh3K5XHIMAJau1+sYOhQAukgoALSQUABoIaEA0EJCAaCFhAJACwkFgBYSCgAtJBQAWkgoALSQUABo4be82LK6P+Zv+fwt83i69tu9HnwSv+UFQCsJhaecz+eHf5fLZdnF/AnHcYzjOHLzy7rXg08ioQDQwjsUtqzuj/kMdVb3p9NpjG/mVe8qduNn3Pl8HuPB/jK+8uz+Usbtqtabct0qfhU3x1fXJedNVTzc8w4FgFY6FLZkR5But9sY31S0+V4i47OC3o2fx5Pj2Smt5HpTtW41vrJ7ntl5TVX87nXJ/efn1frwiA4FgFY6FLZk5ZuVczW+uq+yks75aVbQM37KCruaX1kdf26fVuNpFV+Nv3oddz+v5PHAPR0KAK10KGypKudqPJ+9V8/mM361fj77z/mvPuvP9bIzyO3Taryy+r5V5/XqdczOropf2T0/PosOBYBWOhS2rO6PrKCzwq9kJV3F5/pZWef8dzuVnL97XM9W8KuOI8+rUnUceTxVR7VaP68H3NOhANBKh8JTsqJOWRFPz86r4qu43e27qvm7x1VZfc9WHU+1/2nGV/Onanx3fbinQwGglQ4F/gGdAP8THQoArXQoALxFhwJAKwkFgBYSCgAtJBQAWkgoALSQUAFpIKAC0kFAAaCGhANBCQgGghYQCQAsJBYAWEgoALSQUABoIaEA0EJCAaCFhAJAi9//KQ8A79ChANDiFzolgICA9zwlAAAAAElFTkSuQmCC'); }
+
+/* clicked/hover/focus alternate images */
+#Button1.Button1_click { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACgUlEQVR4Xu3cQU4bQRAF0JCTcBS4VXaIXY7BTeAo3CQsUEXyl0o9w1SIR35vg5iuqW63LVWXR/Ldy8vLnx8AcNDPvAAAX3FXHcr7ew4BwNr9/edfHQoAIxQUAEYoKACMUFAAGKGgADBCQQFghIICwAgFBYARCgoAIxQUAEYoKACM8FteJ/P0lFcuPT/nldtS+3Pr+5DOsi9nWSeX/JYXAKN0KCeRJ7fX198X4+nx8Vdeugm1Tw8Pn/tzq/uQzrIvZ1knl3QoAIzSoZxEd3LLZyr53XOOl61xJeNLd1/GZ4eV92V8ybiS8dNxK12e0uXr7sv43K+0Gk/d5yfHU+ZfzduN783frZPrpEMBYJQO5SRWJ7ccf3v7HK8TYD5zyfG8P3Xxe/OXvC/j0yp/6V5Hxm/N1+nmKZnvq/u19f3O8dTF/+t15f1H83OddCgAjNKhnMTq5JbjdfJbyfjvyl9ynjrB5gm6k+vNdeb1lbyv083TjR/dr6Mn+S5+777kunLenOfo6878XCcdCgCjdCgnkSe/PLnleJ70VjL+u/Onmm/13Xvmy3V211e2ri/n6cZzvSsZv/o/50+5nqP7ku9P/p/Pxrbmz/jV6+I66FAAGKVDOZnuO+88GeZJspMnzO5k2I1P5e+s8nf58sSc1zsZ31m9nm587/yr+My/Mr0vmS8/f2Vv/szLddOhADBKh3JS+Uyh5MmwdPGl7utOmKUbn8rf2Zo/dfN9NV/q8pdufO/8e+NXptZVunxpb/6tefm/dCgAjNKhAHCIDgWAUQoKACMUFABGKCgAjFBQABihoAAwQkEBYISCAsAIBQWAEQoKACMUFABG/P0tLwA4QocCwIgP1DvF0CgyMh8AAAAASUVORK5CYII='); border-color: rgba(0,0,0,0.12); box-shadow: 0 4px 12px rgba(0,0,0,0.28) inset; color: #111; }
+#Button2.Button2_click { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACAUlEQVR4Xu3cQU4jQQwF0GFOwlHgVrND7DhGbgJH4SYzi8gj8SWrkm43StB7G5SualfVyjYl9cPpdPr7CwB2+p0PAGCLh+pQPj9zCADWHh/Pf3UoAIyQUAAYIaEAMEJCAWCEhALACAkFgBESCgAjJBQARkgoAIyQUAAYIaEAMMK3vBj18pJPvnp9zSf3oc516/u/l33ys/iWFwCjdCiMyMr4/f3ty3h6fv6Tj25ane/p6XyuW93/veyTn0WHAsAoHQqjujuU7n/6l87PDih145fGX1lV/peu0+2zdOPXxu/2CUfQoQAwSofCIfIO5ePjXClnRV1W81eVd47n+6v4Kxm/1s+OYrVOFWfK8bz/bHx4BR0KAK10KPwXVeW8eu6yUs/7p4w/569U8VLG37r/KfeVcaZcZ+85VvHhFXQoALTSodAi3yWkqvJevRvISjvXyesZJ+9fWVXyuf/cz951ct95ffQcOX/renCGDgWAVjoUWlXPUVbeWTlXstKessLOuDmvsrdCz3Xz90rOnzJe1zkybnZSVScDR+hQAGilQ+El8p3IVFXC1fxpdV81Ph2NX6nWPbpOFS/tjZ9xV9dwhA4FgFY6FABO0aEA0EpCAaCFhAJACwkFgBYSCgAtJBQAWkgoALSQUABoIaEA0EJCAaCFhAJAi7/f8gKAM3QoALT4A1tIO1A2z7xVAAAAAElFTkSuQmCC'); border-color: rgba(0,0,0,0.12); box-shadow: 0 4px 12px rgba(0,0,0,0.28) inset; color: #111; }
+#Button3.Button3_click { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACBElEQVR4Xu3dQW7iUAwG4HZO0qPQW3WH2HEMbgJH6U1mFhmPhKWn8MiPGKrvk6KKxDHOys8JlPfT6fT7DQA2+tV3AMA93mtC+f7uhwBg3cfH8teEAkCEhgJAhIYCQISGAkCEhgJAhIYCQISGAkCEhgJAhIYCQISGAkCEhgJAhIZCxH6/bK9itt7Z+Gd5lTr5mTQUACI0FKLO5+Pb+Xzsu/9bs/XOxj/Lq9TJz6KhABDh91CIqPv2u92yKv78/LoOGBjd7z8c+p7F1viKm613Lb6/T+l1VVzfX0bHZ/OP6oRH8HsoAESZUIiYXRn3lXi/33+5LOf3FXhZix/lr7gyW2+PH71PGdXV85R+vJ+/NT88ggkFgCgTChGzK+O1+NHx0bOE0lf2/fwyyj8yil+rp9xbV5+oRnr8KD88ggkFgCgNhZew//sN8MNh2Xa749X2bL2evpWq/3L5upo++vV1PV/f1lT+0WtI0FAAiPAMhYhbV7t99T06r3+q6dZnFrVavzd+TeW79TpKjy89X7/eMpu/563Xdb2etZDkGQoAUSYUovr3JEb6inh0Xo8ro/jSz5uNXzOaJO59n1G+bjZ/z7v2Gu5hQgEgyoQCwCYmFACiNBQAIjQUACI0FAAiNBQAIjQUACI0FAAiNBQAIjQUACI0FAAiNBQAIv79Ly8A2MKEAkDEH0hXFuJdqQKQAAAAAElFTkSuQmCC'); border-color: rgba(0,0,0,0.12); box-shadow: 0 4px 12px rgba(0,0,0,0.28) inset; color: #111; }
+#Button4.Button4_click { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZQAAAAsCAYAAABCK04MAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAGHaVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj48dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCjw/eHBhY2tldCBlbmQ9J3cnPz4slJgLAAACOklEQVR4Xu3c3a0aMRAGUN9URSmUQSmUQSnbVfLkCH1irg1MEimcI90H1mPvjxbNzK4uX2OMnwMA3vQjNwDAK75mh3K5XHIMAJau1+sYOhQAukgoALSQUABoIaEA0EJCAaCFhAJACwkFgBYSCgAtJBQAWkgoALSQUABo4be82LK6P+Zv+fwt83i69tu9HnwSv+UFQCsJhaecz+eHf5fLZdnF/AnHcYzjOHLzy7rXg08ioQDQwjsUtqzuj/kMdVb3p9NpjG/mVe8qduNn3Pl8HuPB/jK+8uz+Usbtqtabct0qfhU3x1fXJedNVTzc8w4FgFY6FLZkR5But9sY31S0+V4i47OC3o2fx5Pj2Smt5HpTtW41vrJ7ntl5TVX87nXJ/efn1frwiA4FgFY6FLZk5ZuVczW+uq+yks75aVbQM37KCruaX1kdf26fVuNpFV+Nv3oddz+v5PHAPR0KAK10KGypKudqPJ+9V8/mM361fj77z/mvPuvP9bIzyO3Taryy+r5V5/XqdczOropf2T0/PosOBYBWOhS2rO6PrKCzwq9kJV3F5/pZWef8dzuVnL97XM9W8KuOI8+rUnUceTxVR7VaP68H3NOhANBKh8JTsqJOWRFPz86r4qu43e27qvm7x1VZfc9WHU+1/2nGV/Onanx3fbinQwGglQ4F/gGdAP8THQoArXQoALxFhwJAKwkFgBYSCgAtJBQAWkgoALSQUAFpIKAC0kFAAaCGhANBCQgGghYQCQAsJBYAWEgoALSQUABoIaEA0EJCAaCFhAJAi9//KQ8A79ChANDiFzolgICA9zwlAAAAAElFTkSuQmCC'); border-color: rgba(0,0,0,0.12); box-shadow: 0 4px 12px rgba(0,0,0,0.28) inset; color: #111; }
+
+/* Ensure Button4 stays clearly interactive */
+#Button4 { cursor: pointer; }
+#Button4.Button4_click { outline: 2px solid rgba(0,0,0,0.06); }
+
+/* Keep the escBackdrop behavior as-is (viewport tint) */
+#escBackdrop {
+  position: absolute;
+  width: 866px;
+  height: 480px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 99800;
+  pointer-events: none;
+  display: none;
+  background: linear-gradient(180deg,
+              rgba(0,0,0,0.14) 0%,
+              rgba(0,0,0,0.26) 50%,
+              rgba(0,0,0,0.36) 100%);
+  box-shadow: inset 0 10px 60px rgba(0,0,0,0.24);
+  border-radius: 0;
+}
+#escBackdrop.active { display: block; }
+        </style>
+    </head>
+    <body>
+        <!-- header added per request -->
+        <div id="mc-id" style="position:absolute; left:50%; top:calc(50% - 260px); transform:translateX(-50%); z-index:210; pointer-events:none; color:#fff; font-family:monospace; font-weight:700;">
+          Classic
+        </div>
+
+        <div id="viewport">
+            <canvas id="canvas" width="866" height="480"></canvas>
+            <canvas id="keyCanvas" width="46" height="50"></canvas>
+
+            <!-- Version & FPS overlay (uses /font.ttf loaded by main.js) -->
+            <div id="versionFps" aria-hidden="true" style="position:absolute; left:8px; top:8px; z-index:260; pointer-events:none; color:#fff; font-size:14px; line-height:1;">
+              <!-- populated by main.js -->
+            </div>
+
+            <!-- secret hover dropdown moved inside #viewport so it is centered just below the canvas -->
+            <div id="secret-actions" aria-hidden="true" title="Hover to open">
+              <div id="secret-trigger" aria-hidden="false" role="button" title="Hover for actions">⚙</div>
+              <div id="secret-drop" role="menu" aria-hidden="true">
+                <div style="display:flex; align-items:center; gap:8px; padding:6px; width:380px; justify-content:space-between;">
+                  <button id="secret-controls" aria-label="Show controls" title="Toggle Controls">Controls</button>
+
+                  <div style="display:inline-flex; gap:8px; align-items:center;">
+                    <button id="secret-save" aria-label="Save world">Save</button>
+                    <button id="secret-load" aria-label="Load world">Load</button>
+                  </div>
+                  <button id="secret-invert" aria-label="Invert Mouse Y" title="Invert Mouse Y">Y</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ESC backdrop: dark gradient tint limited to the centered 640x480 viewport -->
+            <div id="escBackdrop" aria-hidden="true"></div>
+        </div>
+
+        <div id="ui">
+          <!-- Invisible trigger inside the UI spot so hovering the UI area opens the secret dropdown -->
+          <div id="secret-trigger-ui" title="Hover to open secret actions" aria-hidden="false" style="width:36px; height:20px; pointer-events:auto; opacity:0;"></div>
+        </div>
+   
+            <!-- small inline toolbar placed next to the UI (keeps DOM balanced) -->
+            <div id="inline-toolbar" style="display:inline-flex; gap:8px; align-items:center; margin-left:8px; pointer-events:auto;">
+
+              <button id="toolbar-more" title="More" style="width:28px; height:20px; border-radius:4px; background:rgba(255,255,255,0.06); color:#fff; border:1px solid rgba(255,255,255,0.06);">⋯</button>
+            </div>
+
+          <div id="controls-expanded" style="margin-top:8px; background:rgba(0,0,0,0.25); padding:10px; border-radius:6px; display:none; pointer-events:auto;">
+            <div style="display:flex; flex-direction:column; gap:6px;">
+            </div>
+          </div>
+
+        <!-- secret-dropdown CSS has been inlined into the page head -->
+
+        <script>
+          // Wire secret buttons to the globally exposed rubyDung instance when present
+          (function(){
+            const saveBtn = document.getElementById('secret-save');
+            const loadBtn = document.getElementById('secret-load');
+            const controlsBtn = document.getElementById('secret-controls');
+            const invertBtn = document.getElementById('secret-invert');
+            const fullscreenBtn = document.getElementById('secret-fullscreen'); // NEW
+            const mapBtn = document.getElementById('secret-mapviewer'); // NEW
+            const secretDrop = document.getElementById('secret-drop');
+            const secretActions = document.getElementById('secret-actions');
+            const secretTriggerUI = document.getElementById('secret-trigger-ui');
+            const canvas = document.getElementById('canvas');
+            const keyCanvas = document.getElementById('keyCanvas');
+            const mcLabel = document.getElementById('mc-id');
+
+            saveBtn && saveBtn.addEventListener('click', () => {
+              if (window.rubyDung && typeof window.rubyDung.saveWorld === 'function') {
+                try { window.rubyDung.saveWorld(); } catch (e) { alert('Save failed: ' + e.message); }
+              } else alert('Save unavailable (game not ready)');
+            });
+
+            loadBtn && loadBtn.addEventListener('click', () => {
+              if (window.rubyDung && typeof window.rubyDung.openWorldPicker === 'function') {
+                try { window.rubyDung.openWorldPicker(); }
+                catch (e) { alert('Load failed: ' + e.message); }
+              } else if (window.rubyDung && typeof window.rubyDung._worldFileInput !== 'undefined') {
+                try { window.rubyDung._worldFileInput && window.rubyDung._worldFileInput.click(); }
+                catch (e) { alert('Load failed: ' + e.message); }
+              } else {
+                alert('Load unavailable (game not ready)');
+              }
+            });
+
+            // Controls button: toggle controls panel open/closed (or show micro popup)
+            controlsBtn && controlsBtn.addEventListener('click', async () => {
+              // Prefer showing a small popup with controls.txt content
+              try {
+                await showControlsPopup();
+              } catch (e) {
+                // fallback to existing panel toggle
+                document.body.classList.toggle('controls-open');
+              }
+            });
+
+            // Invert Y button: toggle player's invertY flag if available
+            invertBtn && invertBtn.addEventListener('click', () => {
+              if (window.rubyDung && window.rubyDung.player) {
+                window.rubyDung.player.invertY = !window.rubyDung.player.invertY;
+                const state = window.rubyDung.player.invertY ? 'ON' : 'OFF';
+                // briefly flash the button text to indicate state
+                invertBtn.textContent = `Y Invert: ${state}`;
+                setTimeout(() => { invertBtn.textContent = 'Y Invert'; }, 900);
+              } else {
+                alert('Invert unavailable (game not ready)');
+              }
+            });
+
+            // Fullscreen button: toggle canvas fullscreen, resize and tweak UI while fullscreen
+            if (fullscreenBtn && canvas) {
+              let wasFullscreen = false;
+              let originalStyles = {
+                width: canvas.style.width || '',
+                height: canvas.style.height || '',
+                position: canvas.style.position || '',
+                left: canvas.style.left || '',
+                top: canvas.style.top || '',
+                transform: canvas.style.transform || ''
+              };
+              let originalKeySize = { w: keyCanvas.width, h: keyCanvas.height };
+
+              async function enterFullscreen() {
+                try {
+                  // request fullscreen on the canvas element
+                  if (canvas.requestFullscreen) await canvas.requestFullscreen({ navigationUI: 'hide' });
+                  else if (canvas.webkitRequestFullscreen) await canvas.webkitRequestFullscreen();
+                  // expand the canvas to fill the screen
+                  resizeCanvasToWindow();
+                  // enlarge key icon for readability
+                  if (keyCanvas) {
+                    keyCanvas.width = Math.max(46, Math.floor(window.innerWidth * 0.06));
+                    keyCanvas.height = Math.max(50, Math.floor(window.innerHeight * 0.06));
+                    keyCanvas.style.width = `${keyCanvas.width}px`;
+                    keyCanvas.style.height = `${keyCanvas.height}px`;
+                    keyCanvas.classList.add('active');
+                  }
+                  // hide the small mc label while fullscreen
+                  if (mcLabel) mcLabel.style.display = 'none';
+                  wasFullscreen = true;
+                } catch (e) {
+                  console.warn('Enter fullscreen failed:', e);
                 }
-                if (x > 0 && other.maxX <= this.minX) {
-                    const max = this.minX - other.maxX;
-                    if (max < x) x = max;
-                }
-                if (x < 0 && other.minX >= this.maxX) {
-                    const max = this.maxX - other.minX;
-                    if (max > x) x = max;
-                }
-                return x;
-            }
+              }
 
-            clipYCollide(other, y) {
-                if (other.maxX <= this.minX || other.minX >= this.maxX || other.maxZ <= this.minZ || other.minZ >= this.maxZ) {
-                    return y;
+              function exitFullscreen() {
+                try {
+                  // restoration performed in fullscreenchange handler; ensure canvas size restored if not
+                  restoreCanvas();
+                  if (keyCanvas) {
+                    keyCanvas.width = originalKeySize.w;
+                    keyCanvas.height = originalKeySize.h;
+                    keyCanvas.style.width = '';
+                    keyCanvas.style.height = '';
+                    if (originalKeySize.w > 0) keyCanvas.classList.add('active');
+                  }
+                  if (mcLabel) mcLabel.style.display = '';
+                  wasFullscreen = false;
+                } catch (e) {
+                  console.warn('Exit fullscreen cleanup failed:', e);
                 }
-                if (y > 0 && other.maxY <= this.minY) {
-                    const max = this.minY - other.maxY;
-                    if (max < y) y = max;
-                }
-                if (y < 0 && other.minY >= this.maxY) {
-                    const max = this.maxY - other.minY;
-                    if (max > y) y = max;
-                }
-                return y;
-            }
+              }
 
-            clipZCollide(other, z) {
-                if (other.maxX <= this.minX || other.minX >= this.maxX || other.maxY <= this.minY || other.minY >= this.maxY) {
-                    return z;
-                }
-                if (z > 0 && other.maxZ <= this.minZ) {
-                    const max = this.minZ - other.maxZ;
-                    if (max < z) z = max;
-                }
-                if (z < 0 && other.minZ >= this.maxZ) {
-                    const max = this.maxZ - other.minZ;
-                    if (max > z) z = max;
-                }
-                return z;
-            }
-
-            intersects(other) {
-                return other.maxX > this.minX && other.minX < this.maxX &&
-                       other.maxY > this.minY && other.minY < this.maxY &&
-                       other.maxZ > this.minZ && other.minZ < this.maxZ;
-            }
-        }
-
-        class Tile {
-            // Constructor now takes string keys for top, bottom, and side faces, referring to loaded textures
-            constructor(id, sideTextureKey, topTextureKey, bottomTextureKey) {
-                this.id = id;
-                this.sideTextureKey = sideTextureKey;
-                this.topTextureKey = topTextureKey;
-                this.bottomTextureKey = bottomTextureKey;
-            }
-
-            // Returns the texture key for a given face
-            getTextureKey(face) {
-                let key;
-                switch (face) {
-                    case 0: key = this.topTextureKey;    break; // Top (Y+)
-                    case 1: key = this.bottomTextureKey; break; // Bottom (Y-)
-                    // Sides (X+/X-/Z+/Z-)
-                    case 2: // North (Z-)
-                    case 3: // South (Z+)
-                    case 4: // East (X+)
-                    case 5: // West (X-)
-                    default: key = this.sideTextureKey;  break;
-                }
-                return key;
-            }
-        }
-
-        const Tiles = {
-            // Define texture keys based on the loaded texture files in RubyDung.js
-            // '1' refers to 1.png, '2' refers to 2.png
-            rock: new Tile(1, '2', '2', '2'), 
-            grass: new Tile(2, '1', '1', '1'), // Grass top: 1.png, Grass side: 1.png, Grass bottom: 1.png
-            dirt: new Tile(3, '2', '2', '2'), // Dirt: 2.png for all faces
-
-            // Additional tiles, explicitly using '2.png' for all faces for now
-            stoneBrick: new Tile(4, '2', '2', '2'),
-            wood: new Tile(5, '2', '2', '2'),
-
-            byId: {},
-            init: function() {
-                for (const tile of Object.values(this)) {
-                    if (tile instanceof Tile) {
-                        this.byId[tile.id] = tile;
+              function resizeCanvasToWindow() {
+                // set canvas render buffer to full window size and make it fill visually
+                try {
+                  canvas.width = window.innerWidth;
+                  canvas.height = window.innerHeight;
+                  canvas.style.width = '100%';
+                  canvas.style.height = '100%';
+                  canvas.style.position = 'fixed';
+                  canvas.style.left = '0';
+                  canvas.style.top = '0';
+                  canvas.style.transform = '';
+                  // If a three renderer exists, try to notify it to resize (best-effort)
+                  if (window.rubyDung && window.rubyDung.renderer && typeof window.rubyDung.renderer.setSize === 'function') {
+                    window.rubyDung.renderer.setSize(window.innerWidth, window.innerHeight, false);
+                    if (window.rubyDung.camera && typeof window.rubyDung.camera.updateProjectionMatrix === 'function') {
+                      window.rubyDung.camera.aspect = window.innerWidth / window.innerHeight;
+                      window.rubyDung.camera.updateProjectionMatrix();
                     }
-                }
-            }
-        };
+                  }
+                } catch (e) { console.warn('resizeCanvasToWindow error', e); }
+              }
 
-        Tiles.init();
-
-        class Player {
-            constructor(scene, camera, world) {
-                this.scene = scene;
-                this.camera = camera;
-                this.world = world;
-
-                // Position & motion
-                this.x = 0;
-                this.y = 0;
-                this.z = 0;
-                this.prevX = 0;
-                this.prevY = 0;
-                this.prevZ = 0;
-                this.motionX = 0;
-                this.motionY = 0;
-                this.motionZ = 0;
-
-                // Rotation (degrees, like original)
-                this.xRotation = 0; // pitch
-                this.yRotation = 0; // yaw
-
-                this.onGround = false;
-                this.width = 0.3;
-                this.height = 0.9;
-                this.boundingBox = new AABB(0, 0, 0, 0, 0, 0);
-
-                this.controls = { forward: false, backward: false, left: false, right: false, jump: false };
-
-                // Bind the mouse move handler to preserve `this` context
-                this.onMouseMove = this.onMouseMove.bind(this);
-
-                this.initControls();
-                this.initPointerLock();
-                this.resetPosition();
-            }
-
-            initControls() {
-                document.addEventListener('keydown', (e) => {
-                    switch (e.code) {
-                        case 'KeyW':
-                        case 'ArrowUp': // Add ArrowUp for forward
-                            this.controls.forward = true;
-                            break;
-                        case 'KeyS':
-                        case 'ArrowDown': // Add ArrowDown for backward
-                            this.controls.backward = true;
-                            break;
-                        case 'KeyA':
-                        case 'ArrowLeft': // Add ArrowLeft for left strafe
-                            this.controls.left = true;
-                            break;
-                        case 'KeyD':
-                        case 'ArrowRight': // Add ArrowRight for right strafe
-                            this.controls.right = true;
-                            break;
-                        case 'Space': this.controls.jump = true; break;
-                        case 'KeyR': this.resetPosition(); break;
+              function restoreCanvas() {
+                try {
+                  canvas.width = 866;
+                  canvas.height = 480;
+                  canvas.style.width = '866px';
+                  canvas.style.height = '480px';
+                  canvas.style.position = '';
+                  canvas.style.left = '';
+                  canvas.style.top = '';
+                  canvas.style.transform = '';
+                  if (window.rubyDung && window.rubyDung.renderer && typeof window.rubyDung.renderer.setSize === 'function') {
+                    window.rubyDung.renderer.setSize(640, 480, false);
+                    if (window.rubyDung.camera && typeof window.rubyDung.camera.updateProjectionMatrix === 'function') {
+                      window.rubyDung.camera.aspect = 640 / 480;
+                      window.rubyDung.camera.updateProjectionMatrix();
                     }
+                  }
+                } catch (e) { console.warn('restoreCanvas error', e); }
+              }
+
+              // Simpler behavior: trigger game save download (level.dat) then open FS.html
+              fullscreenBtn.addEventListener('click', async () => {
+                try {
+                  // If game save helper exists, trigger the save (this will download level.dat)
+                  if (window.rubyDung && typeof window.rubyDung.saveWorld === 'function') {
+                    try { window.rubyDung.saveWorld(); } catch (e) { console.warn('saveWorld failed:', e); }
+                  } else if (window.rubyDung && typeof window.rubyDung.createWorldBlob === 'function') {
+                    // fallback: create blob and force a download
+                    const blob = await window.rubyDung.createWorldBlob();
+                    if (blob) {
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'level.dat';
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      setTimeout(() => URL.revokeObjectURL(url), 1500);
+                    }
+                  } else {
+                    // last resort: alert user
+                    alert('Save unavailable (game not ready)');
+                  }
+
+                  // Open FS.html in a new tab/window (no blob messaging)
+                  const win = window.open('./FS.html', '_blank');
+                  if (!win) {
+                    // popup blocked: try focusing current window or notify
+                    console.warn('Popup blocked when opening FS.html');
+                  }
+                } catch (e) {
+                  console.warn('Open-FS simplified handler failed:', e);
+                }
+              });
+
+              // Map viewer button opens the standalone isometric viewer in a new tab.
+              if (mapBtn) {
+                mapBtn.addEventListener('click', () => {
+                  try {
+                    const win = window.open('./isometric_viewer.html', '_blank');
+                    if (!win) console.warn('Popup blocked when opening isometric_viewer.html');
+                  } catch (e) {
+                    console.warn('Open map viewer failed:', e);
+                    alert('Could not open Map Viewer');
+                  }
                 });
+              }
 
-                document.addEventListener('keyup', (e) => {
-                    switch (e.code) {
-                        case 'KeyW':
-                        case 'ArrowUp': // Add ArrowUp for forward
-                            this.controls.forward = false;
-                            break;
-                        case 'KeyS':
-                        case 'ArrowDown': // Add ArrowDown for backward
-                            this.controls.backward = false;
-                            break;
-                        case 'KeyA':
-                        case 'ArrowLeft': // Add ArrowLeft for left strafe
-                            this.controls.left = false;
-                            break;
-                        case 'KeyD':
-                        case 'ArrowRight': // Add ArrowRight for right strafe
-                            this.controls.right = false;
-                            break;
-                        case 'Space': this.controls.jump = false; break;
+              // Listen for fullscreen change so we can restore state on ESC or user exit
+              document.addEventListener('fullscreenchange', () => {
+                if (document.fullscreenElement) {
+                  // ensure the canvas fills on initial entry and keep keymap visible
+                  resizeCanvasToWindow();
+                  if (keyCanvas) {
+                    keyCanvas.classList.add('active');
+                    // enlarge key icon for readability in case it was small
+                    keyCanvas.width = Math.max(46, Math.floor(window.innerWidth * 0.06));
+                    keyCanvas.height = Math.max(50, Math.floor(window.innerHeight * 0.06));
+                    keyCanvas.style.width = `${keyCanvas.width}px`;
+                    keyCanvas.style.height = `${keyCanvas.height}px`;
+                  }
+                } else if (wasFullscreen) {
+                  // user left fullscreen (via ESC or browser); restore sizes but do NOT hide the keymap
+                  restoreCanvas();
+                  // keep keyCanvas visible (do not remove active class)
+                  if (keyCanvas) {
+                    keyCanvas.width = originalKeySize.w;
+                    keyCanvas.height = originalKeySize.h;
+                    keyCanvas.style.width = originalKeySize.w ? `${originalKeySize.w}px` : '';
+                    keyCanvas.style.height = originalKeySize.h ? `${originalKeySize.h}px` : '';
+                    keyCanvas.classList.add('active');
+                  }
+                  if (mcLabel) mcLabel.style.display = '';
+                  wasFullscreen = false;
+                }
+              });
+
+              // also listen for resize while fullscreen to keep canvas fit
+              window.addEventListener('resize', () => {
+                if (document.fullscreenElement) resizeCanvasToWindow();
+              });
+            }
+
+            // Ensure the dropdown can be shown by hovering the UI spot (secret-trigger-ui)
+            if (secretTriggerUI && secretDrop && secretActions) {
+              let overDrop = false;
+              let overTrigger = false;
+
+              function showDrop() {
+                secretDrop.style.display = 'block';
+                secretDrop.setAttribute('aria-hidden', 'false');
+              }
+              function hideDrop() {
+                secretDrop.style.display = 'none';
+                secretDrop.setAttribute('aria-hidden', 'true');
+              }
+
+              secretTriggerUI.addEventListener('mouseenter', () => {
+                overTrigger = true; showDrop();
+              });
+              secretTriggerUI.addEventListener('mouseleave', () => {
+                overTrigger = false;
+                // small timeout to allow moving into the drop without flicker
+                setTimeout(() => { if (!overDrop && !overTrigger) hideDrop(); }, 80);
+              });
+
+              secretDrop.addEventListener('mouseenter', () => {
+                overDrop = true; showDrop();
+              });
+              secretDrop.addEventListener('mouseleave', () => {
+                overDrop = false;
+                setTimeout(() => { if (!overDrop && !overTrigger) hideDrop(); }, 80);
+              });
+
+              // Keep existing viewport hover behavior as a fallback (original trigger still present)
+              secretActions.addEventListener('mouseenter', () => showDrop());
+              secretActions.addEventListener('mouseleave', () => {
+                setTimeout(() => { if (!overDrop && !overTrigger) hideDrop(); }, 80);
+              });
+
+              // Initialize drop hidden
+              hideDrop();
+            }
+
+            // --- Controls popup helper ---
+            // Create popup element (hidden) and helper to fetch + display controls.txt
+            let _controlsPopup = null;
+            function createControlsPopup() {
+              if (_controlsPopup) return _controlsPopup;
+              const popup = document.createElement('div');
+              popup.id = 'controls-popup';
+              Object.assign(popup.style, {
+                position: 'fixed',
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                minWidth: '260px',
+                maxWidth: '90%',
+                maxHeight: '70%',
+                overflow: 'auto',
+                background: 'rgba(18,18,18,0.96)',
+                color: '#e9e9e9',
+                border: '1px solid rgba(255,255,255,0.08)',
+                padding: '10px',
+                borderRadius: '8px',
+                zIndex: 99999,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                fontFamily: 'monospace',
+                fontSize: '13px',
+                display: 'none',
+                pointerEvents: 'auto',
+                lineHeight: '1.3',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              });
+
+              const header = document.createElement('div');
+              header.textContent = 'Controls';
+              Object.assign(header.style, {
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '8px',
+                fontWeight: '700'
+              });
+
+              const closeBtn = document.createElement('button');
+              closeBtn.textContent = '×';
+              Object.assign(closeBtn.style, {
+                background: 'transparent',
+                border: 'none',
+                color: '#fff',
+                fontSize: '18px',
+                lineHeight: '18px',
+                cursor: 'pointer',
+                padding: '0 6px'
+              });
+              closeBtn.addEventListener('click', () => { popup.style.display = 'none'; });
+
+              const content = document.createElement('pre');
+              content.id = 'controls-popup-content';
+              Object.assign(content.style, {
+                margin: '0',
+                padding: '0',
+                whiteSpace: 'pre-wrap',
+                maxHeight: 'calc(70vh - 48px)',
+                overflow: 'auto'
+              });
+
+              header.appendChild(closeBtn);
+              popup.appendChild(header);
+              popup.appendChild(content);
+
+              // click outside to close
+              setTimeout(() => {
+                document.addEventListener('click', (ev) => {
+                  if (popup.style.display === 'none') return;
+                  if (!popup.contains(ev.target)) popup.style.display = 'none';
+                }, true);
+              }, 0);
+
+              document.body.appendChild(popup);
+              _controlsPopup = popup;
+              return popup;
+            }
+
+            async function showControlsPopup() {
+              const popup = createControlsPopup();
+              const content = document.getElementById('controls-popup-content');
+              if (content && content.textContent && content.textContent.trim().length > 10) {
+                popup.style.display = 'block';
+                return;
+              }
+              try {
+                const resp = await fetch('/controls.txt', { cache: 'no-store' });
+                if (!resp.ok) throw new Error('Failed to fetch controls');
+                const txt = await resp.text();
+                content.textContent = txt;
+                popup.style.display = 'block';
+              } catch (e) {
+                // minimal fallback: open controls panel if fetch fails
+                console.warn('Could not load controls.txt:', e);
+                document.body.classList.toggle('controls-open');
+                throw e;
+              }
+            }
+
+          })();
+        </script>
+
+        <div
+            id="worldOptions"
+            style="
+                position: absolute;
+                top: 10px;
+                left: 120px;
+                color: #fff;
+                z-index: 200;
+                pointer-events: none;
+                opacity: 0.6;
+            "
+        >
+            <label style="font-size: 14px; display: flex; align-items: center; gap: 8px">
+                <span
+                    id="superflat"
+                    style="
+                        outline: none;
+                        padding: 2px 6px;
+                        border-radius: 4px;
+                        background: rgba(255, 255, 255, 0.04);
+                        color: #fff;
+                        min-width: 36px;
+                        display: inline-block;
+                        text-align: center;
+                    "
+                ></span>
+            </label>
+        </div>
+
+        <!-- Cursor visibility helper: keep cursor visible when pointer lock is not active -->
+        <script>
+          (function(){
+            const canvas = document.getElementById('canvas');
+            if (!canvas) return;
+            // Start with visible cursor unless pointer lock is active
+            function updateCursor() {
+              if (document.pointerLockElement === canvas) {
+                canvas.style.cursor = 'none';
+              } else {
+                canvas.style.cursor = 'auto';
+              }
+            }
+            // pointer lock changes
+            document.addEventListener('pointerlockchange', updateCursor, false);
+            document.addEventListener('pointerlockerror', updateCursor, false);
+            // also ensure entering/leaving canvas keeps cursor visible when not pointer-locked
+            canvas.addEventListener('mouseenter', () => { if (document.pointerLockElement !== canvas) canvas.style.cursor = 'auto'; });
+            canvas.addEventListener('mouseleave', () => { if (document.pointerLockElement !== canvas) canvas.style.cursor = 'auto'; });
+            // initialize
+            updateCursor();
+          })();
+        </script>
+
+        <link rel="stylesheet" href="./css/escape-modal.css">
+        <!-- ESC toggled modal (hidden by default) -->
+        <div id="escModal" aria-hidden="true">
+          <div id="escModalBox" role="dialog" aria-modal="true" aria-label="Info">
+            <div id="escModalContent">
+              <!-- Four stacked bars (404x44) with 20px spacing -->
+              <div id="escBars" role="group" aria-label="Pause bars">
+                <div class="esc-bar" id="Button1" aria-hidden="false" tabindex="0"></div>
+                <div class="esc-bar" id="Button2" aria-hidden="false" tabindex="0"></div>
+                <div class="esc-bar" id="Button3" aria-hidden="false" tabindex="0"></div>
+                <div class="esc-bar" id="Button4" aria-hidden="false" tabindex="0"></div>
+              </div>
+            </div>
+            <!-- Close control removed; only Button4_click will close the modal when clicked -->
+          </div>
+        </div>
+
+
+
+        <script type="module" src="./main.js"></script>
+
+        <script>
+          // Toggle alternate hover state classes for esc modal buttons.
+          (function(){
+            const ids = ['Button1','Button2','Button3','Button4'];
+            for (const id of ids) {
+              const el = document.getElementById(id);
+              if (!el) continue;
+              const hoverClass = id + '_click';
+              el.addEventListener('mouseenter', () => el.classList.add(hoverClass), { passive: true });
+              el.addEventListener('mouseleave', () => el.classList.remove(hoverClass), { passive: true });
+              // also toggle on focus/blur for keyboard accessibility
+              el.addEventListener('focus', () => el.classList.add(hoverClass));
+              el.addEventListener('blur', () => el.classList.remove(hoverClass));
+            }
+
+            // Special: when Button4 is in its alternate "_click" state and the user clicks it,
+            // close the ESC modal and resume the game (non-visual "clicker" action).
+            const btn4 = document.getElementById('Button4');
+            if (btn4) {
+              btn4.addEventListener('click', (ev) => {
+                try {
+                  if (btn4.classList.contains('Button4_click')) {
+                    const modal = document.getElementById('escModal');
+                    if (modal) {
+                      modal.style.display = 'none';
+                      modal.setAttribute('aria-hidden', 'true');
                     }
-                });
-            }
-
-            initPointerLock() {
-                const canvas = document.getElementById('canvas');
-                if (!canvas) return;
-
-                canvas.addEventListener('click', () => {
-                    canvas.requestPointerLock();
-                });
-
-                document.addEventListener('pointerlockchange', () => {
-                    if (document.pointerLockElement === canvas) {
-                        document.addEventListener('mousemove', this.onMouseMove, false);
-                    } else {
-                        document.removeEventListener('mousemove', this.onMouseMove, false);
+                    // hide the viewport-scoped ESC backdrop gradient as well
+                    try {
+                      const bd = document.getElementById('escBackdrop');
+                      if (bd) {
+                        bd.classList.remove('active');
+                        bd.style.display = 'none';
+                      }
+                    } catch (bdErr) {
+                      console.warn('Failed to hide escBackdrop', bdErr);
                     }
-                });
-            }
-
-            onMouseMove(event) {
-                const movementX = event.movementX || 0;
-                const movementY = event.movementY || 0;
-
-                // Invert left/right movement by negating movementX
-                this.yRotation -= movementX * 0.15;
-                this.xRotation -= movementY * 0.15;
-
-                // Clamp vertical rotation to prevent over-rotation
-                this.xRotation = Math.max(-90, Math.min(90, this.xRotation));
-
-                // Apply rotation with proper order: Y rotation (yaw) then X rotation (pitch)
-                this.camera.rotation.order = 'YXZ';
-                this.camera.rotation.set(
-                    THREE.MathUtils.degToRad(this.xRotation),
-                    THREE.MathUtils.degToRad(this.yRotation),
-                    0
-                );
-            }
-
-            resetPosition() {
-                const x = Math.random() * this.world.width;
-                const z = Math.random() * this.world.height;
-                // Find a safe Y position above the highest solid block at (x, z)
-                const y = this.world.getGroundHeight(Math.floor(x), Math.floor(z)) + 2; // +2 for above ground
-                this.setPosition(x, y, z);
-            }
-
-            update() {
-                this.tick();
-            }
-
-            tick() {
-                this.prevX = this.x;
-                this.prevY = this.y;
-                this.prevZ = this.z;
-
-                let forward = 0;
-                let strafe = 0;
-
-                if (this.controls.forward) forward -= 1;
-                if (this.controls.backward) forward += 1;
-                if (this.controls.left) strafe -= 1;
-                if (this.controls.right) strafe += 1;
-                if (this.controls.jump && this.onGround) {
-                    this.motionY = 0.06; // Reduced initial jump velocity for slower ascent
-                }
-
-                const accel = this.onGround ? 0.01 : 0.002; // Decreased acceleration for slower movement
-                this.moveRelative(strafe, forward, accel);
-
-                // Gravity (increased for faster falling)
-                this.motionY -= 0.001; // Increased gravity effect
-
-                this.move(this.motionX, this.motionY, this.motionZ);
-
-                // Damping
-                this.motionX *= 0.91;
-                this.motionY *= 0.98;
-                this.motionZ *= 0.91;
-
-                if (this.onGround) {
-                    this.motionX *= 0.8;
-                    this.motionZ *= 0.8;
-                }
-
-                this.camera.position.set(this.x, this.y, this.z);
-            }
-
-            moveRelative(strafe, forward, speed) {
-                let dist = strafe * strafe + forward * forward;
-                if (dist >= 0.01) {
-                    dist = speed / Math.sqrt(dist);
-                    strafe *= dist;
-                    forward *= dist;
-
-                    // Use player's yaw rotation for movement direction
-                    const yawRad = THREE.MathUtils.degToRad(this.yRotation);
-                    const sin = Math.sin(yawRad);
-                    const cos = Math.cos(yawRad);
-
-                    // Forward/backward movement along facing direction
-                    // Strafe left/right perpendicular to facing direction
-                    this.motionX += forward * sin + strafe * cos;
-                    this.motionZ += forward * cos - strafe * sin;
-                }
-            }
-
-            move(xd, yd, zd) {
-                let origX = xd, origY = yd, origZ = zd;
-
-                const expanded = this.boundingBox.expand(xd, yd, zd);
-                const cubes = this.world.getCubes(expanded);
-
-                for (const c of cubes) yd = c.clipYCollide(this.boundingBox, yd);
-                this.boundingBox.move(0, yd, 0);
-
-                for (const c of cubes) xd = c.clipXCollide(this.boundingBox, xd);
-                this.boundingBox.move(xd, 0, 0);
-
-                for (const c of cubes) zd = c.clipZCollide(this.boundingBox, zd);
-                this.boundingBox.move(0, 0, zd);
-
-                this.onGround = origY !== yd && origY < 0;
-
-                if (origX !== xd) this.motionX = 0;
-                if (origY !== yd) this.motionY = 0;
-                if (origZ !== zd) this.motionZ = 0;
-
-                this.x = (this.boundingBox.minX + this.boundingBox.maxX) / 2;
-                this.y = this.boundingBox.minY + 1.62; // Player eye level
-                this.z = (this.boundingBox.minZ + this.boundingBox.maxZ) / 2;
-            }
-
-            setPosition(x, y, z) {
-                this.x = x;
-                this.y = y;
-                this.z = z;
-                const w = this.width;
-                const h = this.height;
-                this.boundingBox = new AABB(x - w, y - h, z - w, x + w, y + h, z + w);
-                this.camera.position.set(this.x, this.y, this.z);
-            }
-        }
-
-        // Block IDs: 0=air, 1=stone, 2=grass, 3=dirt
-        class World {
-            constructor(blockMaterials, materialIndexMap) { // Now accepts an array of ShaderMaterials and a map
-                this.width = 128;
-                this.height = 128; 
-                this.depth = 64; // Max Y level (vertical dimension)
-                this.blocks = new Uint8Array(this.width * this.height * this.depth);
-                this.lightDepths = new Uint8Array(this.width * this.height); // For light/shadows
-                this.blockMaterials = blockMaterials; // Store the array of materials
-                this.materialIndexMap = materialIndexMap; // Store the map from texture key to material index
-                
-                // Chunk dimensions
-                this.chunkSizeX = 16;
-                this.chunkSizeY = this.depth; // Chunks span full world height
-                this.chunkSizeZ = 16;
-
-                this.loadedChunkMeshes = new Map(); // Map<string, THREE.Mesh> to store active chunk meshes
-            }
-
-            async init() {
-                this.generate();
-                this.calcLightDepths(0, 0, this.width, this.height); // Calculate light depths after generation
-            }
-
-            // Faithful port of Level.java terrain and cave generation
-            generate() {
-                // 1. Fill all blocks with stone initially (Java Level.java equivalent of `this.blocks[index] = 1;`)
-                for (let x = 0; x < this.width; x++) {
-                    for (let y = 0; y < this.depth; y++) {
-                        for (let z = 0; z < this.height; z++) {
-                            this.setTile(x, y, z, Tiles.rock.id); // Use rock block ID (1)
-                        }
+                    // re-enable player input if available
+                    if (window.rubyDung && window.rubyDung.player) {
+                      window.rubyDung.player.enabled = true;
                     }
+                    // ensure pointer lock not forced; user must click canvas to re-lock
+                  }
+                } catch (e) {
+                  console.warn('Button4 special-click handler failed', e);
                 }
-
-                // 2. Cave Generation (matches Java Level.java logic)
-                const numCaves = 2500; // Reduced from 10000 to make cave generation less "too much"
-                for (let i = 0; i < numCaves; ++i) {
-                    const caveSize = Math.floor(Math.random() * 6.0) + 1; // Increased max size for larger caves, but not massive
-                    const caveX = Math.floor(Math.random() * this.width);
-                    const caveY = Math.floor(Math.random() * this.depth);
-                    const caveZ = Math.floor(Math.random() * this.height);
-
-                    for (let radiusIter = 0; radiusIter < caveSize; ++radiusIter) {
-                        for (let spherePoint = 0; spherePoint < 1000; ++spherePoint) {
-                            const offsetX = Math.floor(Math.random() * radiusIter * 2.0 - radiusIter);
-                            const offsetY = Math.floor(Math.random() * radiusIter * 2.0 - radiusIter);
-                            const offsetZ = Math.floor(Math.random() * radiusIter * 2.0 - radiusIter);
-
-                            const distanceSq = offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
-                            const currentRadiusSq = radiusIter * radiusIter;
-
-                            if (distanceSq > currentRadiusSq) {
-                                continue;
-                            }
-
-                            const tileX = caveX + offsetX;
-                            const tileY = caveY + offsetY;
-                            const tileZ = caveZ + offsetZ;
-
-                            // Java boundary checks: don't carve if at the very edge
-                            // (x=0, z=0, y=0) or beyond the maximum bounds (x=width-1, y=depth, z=height-1)
-                            if (tileX <= 0 || tileY <= 0 || tileZ <= 0 || tileX >= this.width - 1 || tileY >= this.depth || tileZ >= this.height - 1) {
-                                continue;
-                            }
-
-                            this.setTile(tileX, tileY, tileZ, 0); // 0 for air
-                        }
-                    }
-                }
-
-                // 3. Post-processing to add grass/dirt layers on exposed surfaces
-                for (let x = 0; x < this.width; x++) {
-                    for (let z = 0; z < this.height; z++) {
-                        let surfaceY = -1;
-                        // Find the highest solid block in this column that has air above it
-                        for (let y = this.depth - 1; y >= 0; y--) {
-                            if (this.getTile(x, y, z) !== 0 && this.getTile(x, y + 1, z) === 0) {
-                                surfaceY = y;
-                                break;
-                            }
-                        }
-
-                        if (surfaceY !== -1) {
-                            this.setTile(x, surfaceY, z, Tiles.grass.id); // Topmost exposed block becomes grass
-                            // Add up to 3 layers of dirt below grass
-                            for (let y = surfaceY - 1; y >= Math.max(0, surfaceY - 3); y--) {
-                                if (this.getTile(x, y, z) !== 0) { // Only convert if it's currently a solid block (e.g., rock)
-                                    this.setTile(x, y, z, Tiles.dirt.id);
-                                }
-                            }
-                        }
-                    }
-                }
+              }, { passive: true });
             }
+          })();
+        </script>
 
-            // Calculates the highest solid block for each column (x, z) for light calculations
-            calcLightDepths(minX, minZ, maxX, maxZ) {
-                for (let x = minX; x < minX + maxX; ++x) {
-                    for (let z = minZ; z < minZ + maxZ; ++z) {
-                        let depth;
-                        for (depth = this.depth - 1; depth >= 0; --depth) {
-                            if (this.getTile(x, depth, z) !== 0) { // Found the highest solid block
-                                break;
-                            }
-                        }
-                        this.lightDepths[x + z * this.width] = depth; // Store the y-coordinate of the highest solid block
-                    }
-                }
-            }
 
-            // Determines brightness of a block face based on the adjacent air block's sky exposure and face direction.
-            // blockX, blockY, blockZ are the integer coordinates of the block itself.
-            // face: 0=Top, 1=Bottom, 2=North (Z-), 3=South (Z+), 4=East (X+), 5=West (X-)
-            getBrightness(blockX, blockY, blockZ, face) { 
-                let adjX = blockX;
-                let adjY = blockY;
-                let adjZ = blockZ;
 
-                // Determine the coordinates of the adjacent air block for this face
-                switch (face) {
-                    case 0: adjY += 1; break; // Top (Y+)
-                    case 1: adjY -= 1; break; // Bottom (Y-)
-                    case 2: adjZ -= 1; break; // North (Z-)
-                    case 3: adjZ += 1; break; // South (Z+)
-                    case 4: adjX += 1; break; // East (X+)
-                    case 5: adjX -= 1; break; // West (X-)
-                    default: return { finalBrightness: 1.0, isSunlit: true }; // Should not happen if called correctly for faces
-                }
 
-                // If the adjacent block coordinates are out of the world boundaries,
-                // it's considered exposed to "air" (void) and fully sunlit.
-                if (adjX < 0 || adjX >= this.width || adjY < 0 || adjY >= this.depth || adjZ < 0 || adjZ >= this.height) {
-                    return { finalBrightness: 1.0, isSunlit: true }; // Fully sunlit (adjacent to void/boundary)
-                }
-                
-                // Get the y-coordinate of the highest solid block in the column of the *adjacent air block*.
-                // This determines if the adjacent air block is sunlit or shadowed.
-                const surfaceY = this.lightDepths[adjX + adjZ * this.width];
-                
-                let baseBrightness; 
-                let isSunlit = false;
 
-                // Determine base brightness based on the adjacent air block's sky exposure:
-                // An air block at (adjX, adjY, adjZ) is "sunlit" if its Y coordinate is at or above the surfaceY.
-                // Otherwise, it's considered "in shadow" as it's below an obstruction.
-                if (adjY >= surfaceY) {
-                    baseBrightness = 1.0; // Sunlit air
-                    isSunlit = true;
-                } else {
-                    baseBrightness = 0.5; // Shadowed air
-                    isSunlit = false;
-                }
-
-                // Apply face-specific directional shading multipliers
-                let finalBrightness = baseBrightness;
-                switch (face) {
-                    case 0: // Top face (Y+)
-                    case 1: // Bottom face (Y-)
-                        finalBrightness *= 1.0; // 100% of base brightness
-                        break;
-                    case 2: // North face (Z-)
-                    case 3: // South face (Z+)
-                        finalBrightness *= 0.8; // 80% of base brightness
-                        break;
-                    case 4: // East face (X+)
-                    case 5: // West face (X-)
-                        finalBrightness *= 0.6; // 60% of base brightness
-                        break;
-                }
-                
-                // Clamp final brightness to ensure it stays within a valid range [0, 1]
-                return { finalBrightness: Math.max(0.0, Math.min(1.0, finalBrightness)), isSunlit: isSunlit };
-            }
-
-            // Builds a mesh for a specific chunk (cx, cz are chunk coordinates)
-            buildChunkMesh(cx, cz) {
-                const allPositions = [];
-                const allNormals = [];
-                const allUvs = [];
-                const allColors = [];
-                const allIndices = [];
-                const allIsSunlit = []; 
-                const allIsSideBoundaryFace = []; // NEW: Array to store side boundary face status for each vertex
-                const allIsBottomBoundaryFace = []; // NEW: Array to store bottom boundary face status for each vertex
-
-                const faceGroupInfo = [];
-                let vertexCount = 0;
-
-                // Helper to determine if a specific face of a block is an "inner boundary face" (side walls)
-                const isInnerBoundaryFace = (blockX, blockZ, face) => {
-                    // These are faces that are on the world's edge blocks and point *inward*.
-                    // e.g., for block (width-1, y, z), its West face (X-) is an inner boundary face.
-                    if (face === 2 && blockZ === this.height - 1) return true; // Block at Z=max, face points Z- (North)
-                    if (face === 3 && blockZ === 0) return true;              // Block at Z=min, face points Z+ (South)
-                    if (face === 4 && blockX === 0) return true;              // Block at X=min, face points X+ (East)
-                    if (face === 5 && blockX === this.width - 1) return true; // Block at X=max, face points X- (West)
-                    return false;
-                };
-
-                // Helper function to add a face
-                const addFace = (x, y, z, face, tileId) => {
-                    let facePositions, faceNormals;
-                    
-                    const tile = Tiles.byId[tileId];
-                    if (!tile) return; 
-
-                    const textureKey = tile.getTextureKey(face);
-                    const materialIndex = this.materialIndexMap[textureKey];
-                    if (materialIndex === undefined) {
-                        console.warn(`No material found for texture key: ${textureKey}`);
-                        return; 
-                    }
-                    
-                    const faceUvs = [0, 0, 1, 0, 0, 1, 1, 1]; // (uMin, vMin), (uMax, vMin), (uMin, vMax), (uMax, vMax)
-
-                    switch (face) {
-                        case 0: // Top (Y+)
-                            facePositions = [x, y + 1, z + 1,  x + 1, y + 1, z + 1,  x, y + 1, z,  x + 1, y + 1, z];
-                            faceNormals = [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0];
-                            break;
-                        case 1: // Bottom (Y-)
-                            facePositions = [x, y, z, x + 1, y, z, x, y, z + 1, x + 1, y, z + 1];
-                            faceNormals = [0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0];
-                            break;
-                        case 2: // North (Z-)
-                            facePositions = [x, y, z, x + 1, y, z, x, y + 1, z, x + 1, y + 1, z];
-                            faceNormals = [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1];
-                            break;
-                        case 3: // South (Z+)
-                            facePositions = [x + 1, y, z + 1, x, y, z + 1, x + 1, y + 1, z + 1, x, y + 1, z + 1];
-                            faceNormals = [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1];
-                            break;
-                        case 4: // East (X+)
-                            facePositions = [x + 1, y, z, x + 1, y, z + 1, x + 1, y + 1, z, x + 1, y + 1, z + 1];
-                            faceNormals = [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0];
-                            break;
-                        case 5: // West (X-)
-                            facePositions = [x, y, z + 1, x, y, z, x, y + 1, z + 1, x, y + 1, z];
-                            faceNormals = [-1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0];
-                            break;
-                    }
-                    
-                    const { finalBrightness, isSunlit: faceIsSunlit } = this.getBrightness(x, y, z, face); 
-                    const vertexColors = [];
-                    const vertexIsSunlit = []; 
-                    const vertexIsSideBoundaryFace = []; // NEW: Per-vertex side boundary face status
-                    const vertexIsBottomBoundaryFace = []; // NEW: Per-vertex bottom boundary face status
-
-                    const currentFaceIsSideBoundary = isInnerBoundaryFace(x,z,face);
-                    const currentFaceIsBottomBoundary = (y === 0 && face === 1); // Bottom face (Y-) at world bottom (Y=0)
-
-                    for (let i = 0; i < 4; i++) { 
-                        vertexColors.push(finalBrightness, finalBrightness, finalBrightness); 
-                        vertexIsSunlit.push(faceIsSunlit ? 1.0 : 0.0);
-                        vertexIsSideBoundaryFace.push(currentFaceIsSideBoundary ? 1.0 : 0.0); 
-                        vertexIsBottomBoundaryFace.push(currentFaceIsBottomBoundary ? 1.0 : 0.0);
-                    }
-                    
-                    const currentIndicesStart = allIndices.length;
-
-                    allPositions.push(...facePositions);
-                    allNormals.push(...faceNormals);
-                    allUvs.push(...faceUvs);
-                    allColors.push(...vertexColors); 
-                    allIsSunlit.push(...vertexIsSunlit); 
-                    allIsSideBoundaryFace.push(...vertexIsSideBoundaryFace); 
-                    allIsBottomBoundaryFace.push(...vertexIsBottomBoundaryFace); 
-                    
-                    allIndices.push(vertexCount, vertexCount + 2, vertexCount + 1); // First triangle
-                    allIndices.push(vertexCount + 1, vertexCount + 2, vertexCount + 3); // Second triangle
-
-                    faceGroupInfo.push({
-                        materialIndex: materialIndex,
-                        start: currentIndicesStart,
-                        count: 6 // 6 indices for the two triangles of this face
-                    });
-
-                    vertexCount += 4; // 4 vertices added for this quad
-                };
-
-
-                // Define the global coordinates for this chunk
-                const startX = cx * this.chunkSizeX;
-                const endX = Math.min((cx + 1) * this.chunkSizeX, this.width);
-                const startZ = cz * this.chunkSizeZ;
-                const endZ = Math.min((cz + 1) * this.chunkSizeZ, this.height);
-
-                // Iterate through blocks within this specific chunk
-                for (let x = startX; x < endX; x++) {
-                    for (let y = 0; y < this.depth; y++) { // Y always iterates full world depth
-                        for (let z = startZ; z < endZ; z++) {
-                            const tileId = this.getTile(x, y, z);
-                            if (tileId === 0) continue; // Skip air blocks
-
-                            // Check each face for adjacent blocks to do proper culling
-                            // These checks still need to use global coordinates to check neighboring blocks,
-                            // even if they are outside the current chunk boundary.
-                            
-                            // Top (Y+)
-                            if (this.getTile(x, y + 1, z) === 0) addFace(x, y, z, 0, tileId); 
-                            // Bottom (Y-)
-                            if (this.getTile(x, y - 1, z) === 0 || (y === 0 && this.getTile(x, y - 1, z) === 0)) { // Add bottom face if neighbor is air or it's the very bottom of the world
-                                addFace(x, y, z, 1, tileId); 
-                            }
-                            
-                            // North (Z-) face
-                            if (this.getTile(x, y, z - 1) === 0 || isInnerBoundaryFace(x,z,2)) addFace(x, y, z, 2, tileId); 
-                            // South (Z+) face
-                            if (this.getTile(x, y, z + 1) === 0 || isInnerBoundaryFace(x,z,3)) addFace(x, y, z, 3, tileId);
-                            // East (X+) face
-                            if (this.getTile(x + 1, y, z) === 0 || isInnerBoundaryFace(x,z,4)) addFace(x, y, z, 4, tileId);
-                            // West (X-) face
-                            if (this.getTile(x - 1, y, z) === 0 || isInnerBoundaryFace(x,z,5)) addFace(x, y, z, 5, tileId);
-                        }
-                    }
-                }
-
-                const geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3));
-                geometry.setAttribute('normal', new THREE.Float32BufferAttribute(allNormals, 3));
-                geometry.setAttribute('uv', new THREE.Float32BufferAttribute(allUvs, 2));
-                geometry.setAttribute('color', new THREE.Float32BufferAttribute(allColors, 3)); 
-                geometry.setAttribute('isSunlit', new THREE.Float32BufferAttribute(allIsSunlit, 1));
-                geometry.setAttribute('isSideBoundaryFace', new THREE.Float32BufferAttribute(allIsSideBoundaryFace, 1)); // NEW
-                geometry.setAttribute('isBottomBoundaryFace', new THREE.Float32BufferAttribute(allIsBottomBoundaryFace, 1)); // NEW
-                geometry.setIndex(allIndices);
-
-                // Optimize: Combine contiguous runs of faces with the same material into single groups
-                let currentMaterialIndex = -1;
-                let currentGroupStart = 0;
-                let currentGroupCount = 0;
-
-                for (const face of faceGroupInfo) {
-                    if (face.materialIndex !== currentMaterialIndex) {
-                        if (currentGroupCount > 0) {
-                            geometry.addGroup(currentGroupStart, currentGroupCount, currentMaterialIndex);
-                        }
-                        currentMaterialIndex = face.materialIndex;
-                        currentGroupStart = face.start;
-                        currentGroupCount = face.count;
-                    } else {
-                        currentGroupCount += face.count;
-                    }
-                }
-                if (currentGroupCount > 0) {
-                    geometry.addGroup(currentGroupStart, currentGroupCount, currentMaterialIndex);
-                }
-
-                // Create the mesh for this chunk
-                const mesh = new THREE.Mesh(geometry, this.blockMaterials);
-                return mesh;
-            }
-
-            // Loads a chunk into the scene
-            loadChunk(cx, cz, scene) {
-                const chunkKey = `${cx}_${cz}`;
-                if (this.loadedChunkMeshes.has(chunkKey)) {
-                    return; // Chunk already loaded
-                }
-
-                const mesh = this.buildChunkMesh(cx, cz);
-                scene.add(mesh);
-                this.loadedChunkMeshes.set(chunkKey, mesh);
-            }
-
-            // Unloads a chunk from the scene and disposes its resources
-            unloadChunk(cx, cz, scene) {
-                const chunkKey = `${cx}_${cz}`;
-                const mesh = this.loadedChunkMeshes.get(chunkKey);
-                if (mesh) {
-                    scene.remove(mesh);
-                    mesh.geometry.dispose();
-                    // Materials are shared, so don't dispose them here.
-                    this.loadedChunkMeshes.delete(chunkKey);
-                }
-            }
-
-            getTile(x, y, z) {
-                if (x < 0 || x >= this.width || y < 0 || y >= this.depth || z < 0 || z >= this.height) {
-                    return 0; // Air if out of bounds
-                }
-                return this.blocks[x + y * this.width + z * this.width * this.depth];
-            }
-
-            setTile(x, y, z, value) {
-                if (x < 0 || x >= this.width || y < 0 || y >= this.depth || z < 0 || z >= this.height) {
-                    return;
-                }
-                this.blocks[x + y * this.width + z * this.width * this.depth] = value;
-            }
-
-            getGroundHeight(x, z) {
-                for (let y = this.depth - 1; y >= 0; y--) {
-                    if (this.getTile(x, y, z) !== 0) { // Found a solid block
-                        return y;
-                    }
-                }
-                return 0; // If column is entirely air, return 0
-            }
-
-            // Faithful port of Level.getCubes for collision
-            getCubes(aabb) {
-                const cubes = [];
-                const minX = Math.max(0, Math.floor(aabb.minX) - 1);
-                const maxX = Math.min(this.width, Math.ceil(aabb.maxX) + 1);
-                const minY = Math.max(0, Math.floor(aabb.minY) - 1);
-                const maxY = Math.min(this.depth, Math.ceil(aabb.maxY) + 1);
-                const minZ = Math.max(0, Math.floor(aabb.minZ) - 1);
-                const maxZ = Math.min(this.height, Math.ceil(aabb.maxZ) + 1);
-                for (let x = minX; x < maxX; ++x) {
-                    for (let y = minY; y < maxY; ++y) {
-                        for (let z = minZ; z < maxZ; ++z) {
-                            if (this.getTile(x, y, z) !== 0) {
-                                cubes.push(new AABB(x, y, z, x + 1, y + 1, z + 1));
-                            }
-                        }
-                    }
-                }
-                return cubes;
-            }
-        }
-
-        class RubyDung {
-            constructor() {
-                this.scene = new THREE.Scene();
-                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                this.renderer = new THREE.WebGLRenderer({
-                    canvas: document.querySelector('#canvas'),
-                    antialias: true,
-                });
-                // Configure renderer for old LWJGL style no-shadow lighting
-                this.renderer.shadowMap.enabled = false; // Explicitly disable shadows
-                this.renderer.setPixelRatio(window.devicePixelRatio);
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-
-                this.player = null;
-                this.world = null;
-                this.textureCache = {}; // Cache for textures
-                this.worldInitialized = false; // Flag to track world generation completion
-
-                this.lastTime = performance.now();
-                this.frameCount = 0;
-                this.startTime = 0;
-                this.worldRevealStartTime = 0; // Track when world reveal animation starts
-                this.layerRevealDuration = 100; // Time in milliseconds to reveal one horizontal layer (X), significantly faster
-                this.blockMaterials = []; // Array to hold all shader materials
-                this.materialIndexMap = {}; // Map texture key to its index in blockMaterials array
-
-                this.renderDistance = 3; // Render player's chunk + N chunks in each direction (e.g., 3 means 7x7 area)
-                this.currentLoadedChunkCount = 0; // Track loaded chunks for FPS display
-
-                this.init();
-            }
-
-            // Helper to load and cache textures
-            async loadTexture(url) {
-                if (this.textureCache[url]) {
-                    return this.textureCache[url];
-                }
-                const texture = await new THREE.TextureLoader().loadAsync(url);
-                // Apply nearest filtering for pixel art look
-                texture.magFilter = THREE.NearestFilter;
-                texture.minFilter = THREE.NearestFilter;
-                this.textureCache[url] = texture;
-                return texture;
-            }
-
-            async init() {
-                this.setupScene();
-                this.setupControls();
-
-                                const texture1 = await this.loadTexture("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwgAADsIBFShKgAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIHYzLjM2qefiJQAAAYdpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0n77u/JyBpZD0nVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkJz8+DQo8eDp4bXBtZXRhIHhtbG5zOng9ImFkb2JlOm5zOm1ldGEvIj48cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSJ1dWlkOmZhZjViZGQ1LWJhM2QtMTFkYS1hZDMxLWQzM2Q3NTE4MmYxYiIgeG1sbnM6dGlmZj0iaHR0cDovL25zLmFkb2JlLmNvbS90aWZmLzEuMC8iPjx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+PC9yZGY6RGVzY3JpcHRpb24+PC9yZGY6UkRGPjwveDp4bXBtZXRhPg0KPD94cGFja2V0IGVuZD0ndyc/PiyUmAsAAAMjSURBVDhPPZJPTyN1AEDf/GZaOkOnnaEdWgpDC7uwLmERdl0VNWiMmpiY+A28ePFjcPGTePGrGEwIHsRtqPQPS4ttmLbTTqfz18Mme3557/Skn387TYUQxHGM67oAqKrKeDxG13XW1tbwfZ/ZbEYcxwgh8H0fx3GwbRshSRKe51HJmmxqFna+wmQyQVVVPM+j0+lg5yvsWw3y+Ty+77O6ukqlUiFJEkR1ZY2P944xTZPe7IH7xYhcLkcul6NQKGBZFqN4ihCCp6Vtstksw+GQ5XLJR0+OkL79dTMtFotkMhl0XScIAnK5HHd3dyRJgqIoKIqCpmlomobv+0RRhCzLOI6DODw8JEkSXmw9YzQasVeuUy9sYClFPj94zTevzphOp7iuS00ts281cF2XIAgwDAPpl9/P0jRNabfbfPrsJVfdayzLIk1TjFSj6w4oFAq4rksYhszncwzDIJvNks1mkTdOlfNNzaJRtelM+2iahuM4JEnCYDxEkiTCMOST/RPW9RKBHLNXruMTorgJwjRNOtM+vu8ThiFJkrBcLqnVamQyGUqlEsf1A/5oXnJxc/WeDwYDarUaYjqdsq1XqVarPK8+Yd9qvBOFzq65xV65ThzHhGGIaZp4nofruqRpysXNFWJ9fZ3WYw9Jknjz3y1/92/YMTaJ45jmsM3FzRWtxx6GYVCpVFBVlXq9jmmayLKMUBSFfavB9aDFrrmF53nYtk1z2MbOV/j65AsGgwGWZdFsNpEkiT9bf7FYLMjn88jbZ+r5zsY2t4MuJc2AnMyb7g2qqjIN5jwuJmiaxng8ZjabEQQBURQRhiGZTAbx5dEp7ck9YRjSeuwhhEDXdVzXZTKZcHl5SZqm77YVgoONpxzXD95H5O9+OjpfSRRab9vM53M8z2O5XJKmKT+efc+aVuTk+RHZWEbJr5CsSHQe7ni5c4hdriG//sE+j6KIpRQRRRFfffgZlWKZpYjoje65HXRxFlOmwRzHcWgUa2jSCrfjt6hkEf88/MswmpCmKfP5nMHykd7sAYAj+wMMw+DV7gv6/T5BEHDVveYhcIjjmFkm4H/hSoYFCCqPbwAAAABJRU5ErkJggg=="); 
-                const texture2 = await this.loadTexture("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwgAADsIBFShKgAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIHYzLjM2qefiJQAAAYdpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0n77u/JyBpZD0nVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkJz8+DQo8eDp4bXBtZXRhIHhtbG5zOng9ImFkb2JlOm5zOm1ldGEvIj48cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSJ1dWlkOmZhZjViZGQ1LWJhM2QtMTFkYS1hZDMxLWQzM2Q3NTE4MmYxYiIgeG1sbnM6dGlmZj0iaHR0cDovL25zLmFkb2JlLmNvbS90aWZmLzEuMC8iPjx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+PC9yZGY6RGVzY3JpcHRpb24+PC9yZGY6UkRGPjwveDp4bXBtZXRhPg0KPD94cGFja2V0IGVuZD0ndyc/PiyUmAsAAAEwSURBVDhPbZO9sQIxDIQ/DkqgAELKUAEUQAmUoTIcEqoAClARFyi8Isj9gmd5fOZ2hmFOWv2vTxFRGWBmALh7t5VSdn53p5SCmXEZHQCqioj0oNfr1X0Jd++287qu+v1+D4PNjPf7jbsjIjvOtm3cbjcQkQpUoIpIjYiqqv2X9pkTEVVE6lJKISJ6hRFjRxFBREDrLEc4tSrQZhsTqeouaOTlkn8SjP+Z7Ki75CxpUFVoJ5tHcvfun7mMi8rlqOrhdy4S6L4LrcXxdDm7mfF8PklOIkUEsIyqmgXDwfJo4kossyExJ5tFlns55Vu43++7ABFBRPrC5nPurmBmiEgXS5Kz6hxMK+DunK/XqwJs28bj8cDMWNf1X+cNn8+HfC+J7OxHSNkaw3WsPeHkpA/gDzD5H6TtTFx1AAAAAElFTkSuQmCC"); 
-
-                // Use a solid color for the sky
-                this.scene.background = new THREE.Color(0x80ccfc);
-
-                // Define vertex and fragment shader code for the block rendering with reveal effect
-                const vertexShaderCode = `
-                    attribute float isSunlit; 
-                    attribute float isSideBoundaryFace; // NEW: Declare side boundary face attribute
-                    attribute float isBottomBoundaryFace; // NEW: Declare bottom boundary face attribute
-                    varying vec2 vUv;
-                    varying vec3 vColor;
-                    varying vec3 vWorldPosition; 
-                    varying float vIsSunlit; 
-                    varying float vIsSideBoundaryFace; // NEW
-                    varying float vIsBottomBoundaryFace; // NEW
-
-                    void main() {
-                        vUv = uv;
-                        vColor = color;
-                        vWorldPosition = position; 
-                        vIsSunlit = isSunlit; 
-                        vIsSideBoundaryFace = isSideBoundaryFace; // NEW
-                        vIsBottomBoundaryFace = isBottomBoundaryFace; // NEW
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `;
-
-                const fragmentShaderCode = `
-                    uniform sampler2D tDiffuse;
-                    uniform float uMaxVisibleY; 
-                    uniform float uCurrentLayerXProgress; 
-                    uniform float uWorldWidth; 
-                    uniform vec3 uCameraPosition; 
-                    uniform float uMinDarknessDistance; 
-                    uniform float uMaxDarknessDistance; 
-                    uniform float uIsWorldRevealing; // Flag to indicate if world reveal animation is active
-                    uniform float uSpecialRevealFinished; // NEW: Flag for when special faces (walls/bottom) should be revealed
-
-                    varying vec2 vUv;
-                    varying vec3 vColor;
-                    varying vec3 vWorldPosition; 
-                    varying float vIsSunlit; 
-                    varying float vIsSideBoundaryFace; // NEW
-                    varying float vIsBottomBoundaryFace; // NEW
-
-                    void main() {
-                        // Check if this fragment belongs to a "special" face (inner side wall or world bottom face)
-                        bool isSpecialFace = (vIsSideBoundaryFace > 0.5) || (vIsBottomBoundaryFace > 0.5);
-
-                        if (uIsWorldRevealing > 0.5) { // If world reveal animation is active
-                            if (isSpecialFace) {
-                                // If it's a special face, discard it UNLESS the special reveal phase has started
-                                if (uSpecialRevealFinished < 0.5) {
-                                    discard;
-                                }
-                            } else { // Not a special face, apply regular reveal animation
-                                // Initial reveal: Discard fragments that are clearly above the currently revealing Y level
-                                // Adding a small epsilon for float precision
-                                if (vWorldPosition.y > uMaxVisibleY + 0.001) {
-                                    discard;
-                                }
-
-                                // If this fragment is on the exact Y layer currently being revealed horizontally
-                                // We use floor(uMaxVisibleY) to get the integer Y layer currently animated.
-                                // vWorldPosition.y might not be exactly equal to uMaxVisibleY due to interpolation across faces.
-                                // So we check if floor(vWorldPosition.y) is the current revealing layer.
-                                if (floor(vWorldPosition.y) == floor(uMaxVisibleY)) {
-                                    // Normalize the fragment's X position to 0-1 range based on world width
-                                    float normalizedX = vWorldPosition.x / uWorldWidth;
-                                    
-                                    // Discard if the normalized X is beyond the current horizontal progress
-                                    // Adding a small epsilon for float precision
-                                    if (normalizedX > uCurrentLayerXProgress + 0.001) {
-                                        discard;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        vec4 texColor = texture2D(tDiffuse, vUv);
-                        vec3 finalColor = texColor.rgb * vColor; // Apply brightness from vertex color
-
-                        // Calculate distance to camera
-                        float dist = distance(vWorldPosition, uCameraPosition);
-
-                        // Apply distance-based darkness: mix original color with black based on distance
-                        // Only apply darkness if the surface is *not* sunlit (vIsSunlit is 0.0 for shadowed, 1.0 for sunlit)
-                        if (vIsSunlit < 0.5) { 
-                            float darkness_amount = smoothstep(uMinDarknessDistance, uMaxDarknessDistance, dist);
-                            finalColor = mix(finalColor, vec3(0.0), darkness_amount); // Mix with black
-                        }
-
-                        gl_FragColor = vec4(finalColor, texColor.a);
-                    }
-                `;
-
-                const texturesMap = {
-                    '1': texture1,
-                    '2': texture2
-                };
-
-                let materialIdx = 0;
-                for (const key in texturesMap) {
-                    const material = new THREE.ShaderMaterial({
-                        uniforms: {
-                            tDiffuse: { value: texturesMap[key] },
-                            uMaxVisibleY: { value: 0.0 }, // Start at 0, will animate up
-                            uCurrentLayerXProgress: { value: 0.0 }, // Start at 0, will animate horizontally
-                            uWorldWidth: { value: 1.0 }, 
-                            uCameraPosition: { value: new THREE.Vector3() }, // Initial camera position, will be updated per frame
-                            uMinDarknessDistance: { value: 5.0 }, // Darkening starts closer
-                            uMaxDarknessDistance: { value: 20.0 }, // Reaches full darkness sooner
-                            uIsWorldRevealing: { value: 1.0 }, // Initially true (1.0)
-                            uSpecialRevealFinished: { value: 0.0 }
-                        },
-                        vertexShader: vertexShaderCode,
-                        fragmentShader: fragmentShaderCode,
-                        vertexColors: true, // Enable vertex color attribute
-                        side: THREE.DoubleSide, // Render both sides of faces
-                    });
-                    this.blockMaterials.push(material);
-                    this.materialIndexMap[key] = materialIdx++;
-                }
-
-                this.world = new World(this.blockMaterials, this.materialIndexMap); // Pass the array of materials and the index map
-                await this.world.init();
-                
-                this.worldInitialized = true;
-                this.worldRevealStartTime = performance.now(); // Start reveal animation timer
-
-                this.player = new Player(this.scene, this.camera, this.world);
-                this.player.resetPosition();
-
-                this.animate();
-                this.startFPSTimer(); // Start the FPS logging timer
-            }
-
-            setupScene() {
-                const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-                this.scene.add(ambientLight);
-
-                window.addEventListener('resize', this.onWindowResize.bind(this), false);
-            }
-
-            setupControls() {
-                // The player class now handles its own controls and camera updates
-            }
-
-            onWindowResize() {
-                this.camera.aspect = window.innerWidth / window.innerHeight;
-                this.camera.updateProjectionMatrix();
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-            }
-
-            startFPSTimer() {
-                setInterval(() => {
-                    if (this.frameCount > 0) {
-                        const elapsedSeconds = (performance.now() - this.startTime) / 1000;
-                        const fps = Math.round(this.frameCount / elapsedSeconds);
-                        console.log(`${fps} fps, ${this.currentLoadedChunkCount} chunks loaded`);
-                        // Reset for next interval
-                        this.frameCount = 0;
-                        this.startTime = performance.now();
-                    }
-                }, 2000); // Update every 2 seconds
-            }
-
-            animate() {
-                requestAnimationFrame(this.animate.bind(this));
-
-                const time = performance.now();
-                this.frameCount++; // Increment frame count for FPS calculation
-
-                if (!this.startTime) this.startTime = time; // Initialize startTime if not set
-
-                if (this.worldInitialized) {
-                    const totalMainRevealDuration = this.world.depth * this.layerRevealDuration; 
-                    const specialFacesRevealDuration = 500; 
-                    const totalAnimationDuration = totalMainRevealDuration + specialFacesRevealDuration;
-
-                    let isRevealing = false;
-                    let uMaxVisibleYValue = 0.0;
-                    let uCurrentLayerXProgressValue = 0.0;
-                    let uIsWorldRevealingValue = 1.0; 
-                    let uSpecialRevealFinishedValue = 0.0;
-
-                    if (this.worldRevealStartTime > 0) {
-                        const elapsedTime = time - this.worldRevealStartTime;
-
-                        if (elapsedTime < totalMainRevealDuration) {
-                            isRevealing = true;
-                            uIsWorldRevealingValue = 1.0;
-                            uSpecialRevealFinishedValue = 0.0; 
-
-                            let globalProgress = elapsedTime / totalMainRevealDuration;
-                            uMaxVisibleYValue = Math.min(this.world.depth, Math.floor(globalProgress * this.world.depth));
-                            uCurrentLayerXProgressValue = (globalProgress * this.world.depth) - uMaxVisibleYValue;
-                        } else if (elapsedTime < totalAnimationDuration) {
-                            isRevealing = true;
-                            uIsWorldRevealingValue = 1.0;
-                            uSpecialRevealFinishedValue = 1.0; 
-
-                            uMaxVisibleYValue = this.world.depth;
-                            uCurrentLayerXProgressValue = 1.0;
-                        } else {
-                            this.worldRevealStartTime = 0;
-                            isRevealing = false;
-                            uIsWorldRevealingValue = 0.0;
-                            uSpecialRevealFinishedValue = 1.0; 
-                            uMaxVisibleYValue = this.world.depth;
-                            uCurrentLayerXProgressValue = 1.0;
-                        }
-                    } else {
-                        uIsWorldRevealingValue = 0.0;
-                        uSpecialRevealFinishedValue = 1.0;
-                        uMaxVisibleYValue = this.world.depth;
-                        uCurrentLayerXProgressValue = 1.0;
-                    }
-
-                    this.blockMaterials.forEach(material => {
-                        material.uniforms.uMaxVisibleY.value = uMaxVisibleYValue;
-                        material.uniforms.uCurrentLayerXProgress.value = uCurrentLayerXProgressValue;
-                        material.uniforms.uWorldWidth.value = this.world.width; 
-                        material.uniforms.uIsWorldRevealing.value = uIsWorldRevealingValue;
-                        material.uniforms.uSpecialRevealFinished.value = uSpecialRevealFinishedValue; // NEW
-                    });
-                }
-
-                if (this.player) {
-                    this.player.tick((time - this.lastTime) / 1000); // Pass delta time to player
-                    
-                    // Update uCameraPosition uniform for all block materials
-                    // This ensures distance-based darkening is always based on current camera position
-                    this.blockMaterials.forEach(material => {
-                        material.uniforms.uCameraPosition.value.copy(this.camera.position);
-                    });
-
-                    // Chunk loading/unloading logic based on player position
-                    if (this.worldInitialized) {
-                        const playerX = Math.floor(this.player.x);
-                        const playerZ = Math.floor(this.player.z);
-
-                        const currentChunkX = Math.floor(playerX / this.world.chunkSizeX);
-                        const currentChunkZ = Math.floor(playerZ / this.world.chunkSizeZ);
-
-                        const chunksToLoad = new Set();
-                        const totalChunksX = Math.ceil(this.world.width / this.world.chunkSizeX);
-                        const totalChunksZ = Math.ceil(this.world.height / this.world.chunkSizeZ);
-
-                        for (let i = -this.renderDistance; i <= this.renderDistance; i++) {
-                            for (let j = -this.renderDistance; j <= this.renderDistance; j++) {
-                                const targetChunkX = currentChunkX + i;
-                                const targetChunkZ = currentChunkZ + j;
-
-                                // Ensure chunk coordinates are within world bounds
-                                if (targetChunkX >= 0 && targetChunkX < totalChunksX &&
-                                    targetChunkZ >= 0 && targetChunkZ < totalChunksZ) {
-                                    chunksToLoad.add(`${targetChunkX}_${targetChunkZ}`);
-                                }
-                            }
-                        }
-
-                        // Unload chunks that are no longer in range
-                        for (const chunkKey of this.world.loadedChunkMeshes.keys()) {
-                            if (!chunksToLoad.has(chunkKey)) {
-                                const [cx, cz] = chunkKey.split('_').map(Number);
-                                this.world.unloadChunk(cx, cz, this.scene);
-                            }
-                        }
-
-                        // Load chunks that are now in range
-                        for (const chunkKey of chunksToLoad) {
-                            if (!this.world.loadedChunkMeshes.has(chunkKey)) {
-                                const [cx, cz] = chunkKey.split('_').map(Number);
-                                this.world.loadChunk(cx, cz, this.scene);
-                            }
-                        }
-                        this.currentLoadedChunkCount = this.world.loadedChunkMeshes.size;
-                    }
-                }
-
-                this.renderer.render(this.scene, this.camera);
-                this.lastTime = time;
-            }
-        }
-
-        new RubyDung();
-		//Made by STG @https://github.com/CaveGameDev/
-		//Made using WindSurf editor, compiled using SimpleTranspilerScript, 
-		//NOT EAGLERCRAFT.
-    </script>
-</body>
+        <script src="icon.js"></script>
+    </body>
 </html>
