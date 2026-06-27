@@ -1,0 +1,22 @@
+
+W / ArrowUp — Move forward
+S / ArrowDown — Move back
+A / ArrowLeft — Strafe left
+D / ArrowRight — Strafe right
+
+Space — Jump
+
+Left Click — Break block
+Right Click — Place block
+
+1/2/3/4/6 — Select block
+
+G — Spawn zombie
+Y — Toggle mouse Y inversion
+
+8 — Load world
+9 — Save world
+TO CONVERT CLASSIC LEVELS TO THIS LEVELFORMAT, GOTO:
+https;//rd-main.pages.dev/convert
+MADE BY https://github.com/CaveGameDev
+:>
